@@ -1438,6 +1438,7 @@ _SOKOL_PRIVATE _sfetch_item_t* _sfetch_pool_item_lookup(_sfetch_pool_t* pool, ui
 /*=== PLATFORM WRAPPER FUNCTIONS =============================================*/
 #if _SFETCH_PLATFORM_POSIX
 _SOKOL_PRIVATE _sfetch_file_handle_t _sfetch_file_open(const _sfetch_path_t* path) {
+    SOKOL_LOGI("_sfetch_file_open: %s \n", path->buf);
     return fopen(path->buf, "rb");
 }
 

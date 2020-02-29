@@ -887,6 +887,8 @@ SOKOL_API_DECL const void* sapp_android_get_native_activity(void);
         #if defined(__ANDROID__)
             #include <android/log.h>
             #define SOKOL_LOG(s) { SOKOL_ASSERT(s); __android_log_write(ANDROID_LOG_INFO, "SOKOL_APP", s); }
+			#define LOGI(...) ((void)__android_log_print(ANDROID_LOG_INFO, "SOKOL_APP", __VA_ARGS__))
+			#define LOGW(...) ((void)__android_log_print(ANDROID_LOG_WARN, "SOKOL_APP", __VA_ARGS__))
         #else
             #include <stdio.h>
             #define SOKOL_LOG(s) { SOKOL_ASSERT(s); puts(s); }
@@ -4513,18 +4515,27 @@ static _sapp_android_state_t _sapp_android_state;
 
 /* android loop thread */
 _SOKOL_PRIVATE bool _sapp_android_init_egl(void) {
+	
+	SOKOL_LOG("_sapp_android_init_egl");
+	
     _sapp_android_state_t* state = &_sapp_android_state;
     SOKOL_ASSERT(state->display == EGL_NO_DISPLAY);
     SOKOL_ASSERT(state->context == EGL_NO_CONTEXT);
 
+    EGLConfig config;
+
+	
     EGLDisplay display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
     if (display == EGL_NO_DISPLAY) {
+		SOKOL_LOG("EGL_NO_DISPLAY");
         return false;
     }
     if (eglInitialize(display, NULL, NULL) == EGL_FALSE) {
+		SOKOL_LOG("eglInitialize fail");
         return false;
     }
 
+	SOKOL_LOG("eglInitialize success");
     EGLint alpha_size = _sapp.desc.alpha ? 8 : 0;
     const EGLint cfg_attributes[] = {
         EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
@@ -4541,33 +4552,65 @@ _SOKOL_PRIVATE bool _sapp_android_init_egl(void) {
         EGL_STENCIL_SIZE, 0,
         EGL_NONE,
     };
+	
+	
     EGLConfig available_cfgs[32];
     EGLint cfg_count;
     eglChooseConfig(display, cfg_attributes, available_cfgs, 32, &cfg_count);
     SOKOL_ASSERT(cfg_count > 0);
     SOKOL_ASSERT(cfg_count <= 32);
+	
 
     /* find config with 8-bit rgb buffer if available, ndk sample does not trust egl spec */
-    EGLConfig config;
     bool exact_cfg_found = false;
+	int best_config_index = -1;
+	int best_config_score = 9999999;
     for (int i = 0; i < cfg_count; ++i) {
         EGLConfig c = available_cfgs[i];
         EGLint r, g, b, a, d;
-        if (eglGetConfigAttrib(display, c, EGL_RED_SIZE, &r) == EGL_TRUE &&
-            eglGetConfigAttrib(display, c, EGL_GREEN_SIZE, &g) == EGL_TRUE &&
-            eglGetConfigAttrib(display, c, EGL_BLUE_SIZE, &b) == EGL_TRUE &&
-            eglGetConfigAttrib(display, c, EGL_ALPHA_SIZE, &a) == EGL_TRUE &&
-            eglGetConfigAttrib(display, c, EGL_DEPTH_SIZE, &d) == EGL_TRUE &&
-            r == 8 && g == 8 && b == 8 && (alpha_size == 0 || a == alpha_size) && d == 16) {
+		eglGetConfigAttrib(display, c, EGL_RED_SIZE, &r);
+		eglGetConfigAttrib(display, c, EGL_GREEN_SIZE, &g);
+		eglGetConfigAttrib(display, c, EGL_BLUE_SIZE, &b);
+		eglGetConfigAttrib(display, c, EGL_ALPHA_SIZE, &a);
+		eglGetConfigAttrib(display, c, EGL_ALPHA_SIZE, &d);
+		LOGI("EGLConfig Info: %d:%d:%d:%d:%d \n", r,g,b,a,d);
+		
+		int config_score = abs(8-r) + abs(8-g) + abs(8-b) + abs(alpha_size-a) + abs(16-d);
+		if(config_score < best_config_score)
+		{
+			best_config_score = config_score;
+			best_config_index = i;
+		}
+		
+        if (r == 8 && g == 8 && b == 8 && ( a == alpha_size) && d == 16) {
+			SOKOL_LOG("exact_cfg_found");
             exact_cfg_found = true;
             config = c;
             break;
         }
     }
     if (!exact_cfg_found) {
-        config = available_cfgs[0];
+		SOKOL_LOG("exact_cfg_not found");
+		if(best_config_index >= 0 && best_config_index < cfg_count)
+		{
+			LOGI("choose config: %d", best_config_index);
+			config = available_cfgs[best_config_index];
+			EGLint r, g, b, a, d;
+			eglGetConfigAttrib(display, config, EGL_RED_SIZE, &r);
+			eglGetConfigAttrib(display, config, EGL_GREEN_SIZE, &g);
+			eglGetConfigAttrib(display, config, EGL_BLUE_SIZE, &b);
+			eglGetConfigAttrib(display, config, EGL_ALPHA_SIZE, &a);
+			eglGetConfigAttrib(display, config, EGL_ALPHA_SIZE, &d);
+			LOGI("chosen config Info: %d:%d:%d:%d:%d \n", r,g,b,a,d);
+		}
+		else
+		{
+			LOGI("choose config: %d", 0);
+			config = available_cfgs[0];
+		}
     }
 
+	
     EGLint ctx_attributes[] = {
         #if defined(SOKOL_GLES3)
             EGL_CONTEXT_CLIENT_VERSION, _sapp.desc.gl_force_gles2 ? 2 : 3,
@@ -4576,10 +4619,14 @@ _SOKOL_PRIVATE bool _sapp_android_init_egl(void) {
         #endif
         EGL_NONE,
     };
+	
+
     EGLContext context = eglCreateContext(display, config, EGL_NO_CONTEXT, ctx_attributes);
     if (context == EGL_NO_CONTEXT) {
+		SOKOL_LOG("EGL_NO_CONTEXT");
         return false;
     }
+	
 
     state->config = config;
     state->display = display;
@@ -4840,7 +4887,7 @@ _SOKOL_PRIVATE int _sapp_android_main_cb(int fd, int events, void* data) {
     switch (msg) {
         case _SOKOL_ANDROID_MSG_CREATE:
             {
-                SOKOL_LOG("MSG_CREATE");
+                SOKOL_LOG("MSG_CREATE-1");
                 SOKOL_ASSERT(!_sapp.valid);
                 bool result = _sapp_android_init_egl();
                 SOKOL_ASSERT(result);

@@ -2249,6 +2249,7 @@ SOKOL_API_DECL void sg_discard_context(sg_context ctx_id);
     #define GL_LUMINANCE 0x1909
     #endif
 
+	/* tbd eli
     #ifdef SOKOL_GLES2
     #   ifdef GL_ANGLE_instanced_arrays
     #       define SOKOL_INSTANCING_ENABLED
@@ -2269,6 +2270,7 @@ SOKOL_API_DECL void sg_discard_context(sg_context ctx_id);
     #else
     #   define SOKOL_INSTANCING_ENABLED
     #endif
+*/
     #define _SG_GL_CHECK_ERROR() { SOKOL_ASSERT(glGetError() == GL_NO_ERROR); }
 
 #elif defined(SOKOL_D3D11)
@@ -6211,9 +6213,11 @@ _SOKOL_PRIVATE void _sg_draw(int base_element, int num_elements, int num_instanc
             glDrawElements(p_type, num_elements, i_type, indices);
         }
         else {
+#ifdef SOKOL_INSTANCING_ENABLED
             if (_sg.features.instancing) {
                 glDrawElementsInstanced(p_type, num_elements, i_type, indices, num_instances);
             }
+#endif
         }
     }
     else {
@@ -6222,9 +6226,11 @@ _SOKOL_PRIVATE void _sg_draw(int base_element, int num_elements, int num_instanc
             glDrawArrays(p_type, base_element, num_elements);
         }
         else {
+#ifdef SOKOL_INSTANCING_ENABLED			
             if (_sg.features.instancing) {
                 glDrawArraysInstanced(p_type, base_element, num_elements, num_instances);
             }
+#endif			
         }
     }
 }
