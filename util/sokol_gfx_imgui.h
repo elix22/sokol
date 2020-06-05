@@ -611,11 +611,14 @@ SOKOL_API_DECL void sg_imgui_draw_capabilities_window(sg_imgui_t* ctx);
     #define SOKOL_FREE(p) free(p)
 #endif
 #ifndef _SOKOL_PRIVATE
-    #if defined(__GNUC__)
+    #if defined(__GNUC__) || defined(__clang__)
         #define _SOKOL_PRIVATE __attribute__((unused)) static
     #else
         #define _SOKOL_PRIVATE static
     #endif
+#endif
+#ifndef _SOKOL_UNUSED
+#define _SOKOL_UNUSED(x) (void)(x)
 #endif
 #ifndef SOKOL_API_IMPL
 #define SOKOL_API_IMPL
@@ -857,6 +860,15 @@ _SOKOL_PRIVATE const char* _sg_imgui_imagetype_string(sg_image_type t) {
         case SG_IMAGETYPE_CUBE:     return "SG_IMAGETYPE_CUBE";
         case SG_IMAGETYPE_3D:       return "SG_IMAGETYPE_3D";
         case SG_IMAGETYPE_ARRAY:    return "SG_IMAGETYPE_ARRAY";
+        default:                    return "???";
+    }
+}
+
+_SOKOL_PRIVATE const char* _sg_imgui_samplertype_string(sg_sampler_type t) {
+    switch (t) {
+        case SG_SAMPLERTYPE_FLOAT:  return "SG_SAMPLERTYPE_FLOAT";
+        case SG_SAMPLERTYPE_SINT:   return "SG_SAMPLERTYPE_SINT";
+        case SG_SAMPLERTYPE_UINT:   return "SG_SAMPLERTYPE_UINT";
         default:                    return "???";
     }
 }
@@ -2672,14 +2684,14 @@ _SOKOL_PRIVATE void _sg_imgui_draw_buffer_panel(sg_imgui_t* ctx, sg_buffer buf) 
     }
 }
 
-_SOKOL_PRIVATE bool _sg_imgui_image_renderable(sg_imgui_t* ctx, sg_image_type type, sg_pixel_format fmt) {
+_SOKOL_PRIVATE bool _sg_imgui_image_renderable(sg_image_type type, sg_pixel_format fmt) {
     return (type == SG_IMAGETYPE_2D) && sg_query_pixelformat(fmt).sample && !sg_query_pixelformat(fmt).depth;
 }
 
 _SOKOL_PRIVATE void _sg_imgui_draw_embedded_image(sg_imgui_t* ctx, sg_image img, float* scale) {
     if (sg_query_image_state(img) == SG_RESOURCESTATE_VALID) {
         sg_imgui_image_t* img_ui = &ctx->images.slots[_sg_imgui_slot_index(img.id)];
-        if (_sg_imgui_image_renderable(ctx, img_ui->desc.type, img_ui->desc.pixel_format)) {
+        if (_sg_imgui_image_renderable(img_ui->desc.type, img_ui->desc.pixel_format)) {
             igPushIDInt((int)img.id);
             igSliderFloat("Scale", scale, 0.125f, 8.0f, "%.3f", 2.0f);
             float w = (float)img_ui->desc.width * (*scale);
@@ -2737,7 +2749,7 @@ _SOKOL_PRIVATE void _sg_imgui_draw_image_panel(sg_imgui_t* ctx, sg_image img) {
     }
 }
 
-_SOKOL_PRIVATE void _sg_imgui_draw_shader_stage(sg_imgui_t* ctx, const sg_shader_stage_desc* stage) {
+_SOKOL_PRIVATE void _sg_imgui_draw_shader_stage(const sg_shader_stage_desc* stage) {
     int num_valid_ubs = 0;
     for (int i = 0; i < SG_MAX_SHADERSTAGE_UBS; i++) {
         const sg_shader_uniform_block_desc* ub = &stage->uniform_blocks[i];
@@ -2783,7 +2795,10 @@ _SOKOL_PRIVATE void _sg_imgui_draw_shader_stage(sg_imgui_t* ctx, const sg_shader
             for (int i = 0; i < SG_MAX_SHADERSTAGE_IMAGES; i++) {
                 const sg_shader_image_desc* sid = &stage->images[i];
                 if (sid->type != _SG_IMAGETYPE_DEFAULT) {
-                    igText("%s %s", _sg_imgui_imagetype_string(sid->type), sid->name ? sid->name : "");
+                    igText("slot: %d\n  name: %s\n  type: %s\n  sampler_type: %s",
+                        i, sid->name ? sid->name : "NONE",
+                        _sg_imgui_imagetype_string(sid->type),
+                        _sg_imgui_samplertype_string(sid->sampler_type));
                 }
                 else {
                     break;
@@ -2831,11 +2846,11 @@ _SOKOL_PRIVATE void _sg_imgui_draw_shader_panel(sg_imgui_t* ctx, sg_shader shd) 
                 igTreePop();
             }
             if (igTreeNodeStr("Vertex Shader Stage")) {
-                _sg_imgui_draw_shader_stage(ctx, &shd_ui->desc.vs);
+                _sg_imgui_draw_shader_stage(&shd_ui->desc.vs);
                 igTreePop();
             }
             if (igTreeNodeStr("Fragment Shader Stage")) {
-                _sg_imgui_draw_shader_stage(ctx, &shd_ui->desc.fs);
+                _sg_imgui_draw_shader_stage(&shd_ui->desc.fs);
                 igTreePop();
             }
         }
@@ -3097,7 +3112,7 @@ _SOKOL_PRIVATE void _sg_imgui_draw_uniforms_panel(sg_imgui_t* ctx, const sg_imgu
             else {
                 igText("%d: %s %s =", i, _sg_imgui_uniformtype_string(ud->type), ud->name?ud->name:"");
             }
-            for (int i = 0; i < num_items; i++) {
+            for (int item_index = 0; item_index < num_items; item_index++) {
                 switch (ud->type) {
                     case SG_UNIFORMTYPE_FLOAT:
                         igText("    %.3f", *uptrf);
@@ -3319,7 +3334,7 @@ _SOKOL_PRIVATE void _sg_imgui_draw_capture_panel(sg_imgui_t* ctx) {
     igEndChild();
 }
 
-_SOKOL_PRIVATE void _sg_imgui_draw_caps_panel(sg_imgui_t* ctx) {
+_SOKOL_PRIVATE void _sg_imgui_draw_caps_panel(void) {
     igText("Backend: %s\n\n", _sg_imgui_backend_string(sg_query_backend()));
     sg_features f = sg_query_features();
     igText("Features:");
@@ -3644,7 +3659,8 @@ SOKOL_API_IMPL void sg_imgui_draw_capture_content(sg_imgui_t* ctx) {
 
 SOKOL_API_IMPL void sg_imgui_draw_capabilities_content(sg_imgui_t* ctx) {
     SOKOL_ASSERT(ctx && (ctx->init_tag == 0xABCDABCD));
-    _sg_imgui_draw_caps_panel(ctx);
+    _SOKOL_UNUSED(ctx);
+    _sg_imgui_draw_caps_panel();
 }
 
 #endif /* SOKOL_GFX_IMGUI_IMPL */

@@ -6,7 +6,7 @@ Simple
 [STB-style](https://github.com/nothings/stb/blob/master/docs/stb_howto.txt)
 cross-platform libraries for C and C++, written in C.
 
-[See what's new](#updates) (**30-Jan-2020**: some internal code cleanup in sokol_gfx.h)
+[See what's new](#updates) (**01-Jun-2020**: sapp_toggle_fullscreen() and sapp_is_fullscreen() functions)
 
 [Live Samples](https://floooh.github.io/sokol-html5/index.html) via WASM.
 
@@ -25,6 +25,7 @@ Utility libraries:
 - **sokol\_gl.h**: OpenGL 1.x style immediate-mode rendering API on top of sokol_gfx.h
 - **sokol\_fontstash.h**: sokol_gl.h rendering backend for [fontstash](https://github.com/memononen/fontstash)
 - **sokol\_gfx\_imgui.h**: debug-inspection UI for sokol_gfx.h (implemented with Dear ImGui)
+- **sokol\_debugtext.h**: a simple text renderer using vintage home computer fonts
 
 WebAssembly is a 'first-class citizen', one important motivation for the
 Sokol headers is to provide a collection of cross-platform APIs with a
@@ -170,18 +171,13 @@ to split the Objective-C code from the C code of the sample):
 ```cpp
 #include "sokol_app.h"
 #include "sokol_gfx.h"
+#include "sokol_glue.h"
 
 sg_pass_action pass_action;
 
 void init(void) {
     sg_setup(&(sg_desc){
-        .mtl_device = sapp_metal_get_device(),
-        .mtl_renderpass_descriptor_cb = sapp_metal_get_renderpass_descriptor,
-        .mtl_drawable_cb = sapp_metal_get_drawable,
-        .d3d11_device = sapp_d3d11_get_device(),
-        .d3d11_device_context = sapp_d3d11_get_device_context(),
-        .d3d11_render_target_view_cb = sapp_d3d11_get_render_target_view,
-        .d3d11_depth_stencil_view_cb = sapp_d3d11_get_depth_stencil_view
+        .context = sapp_sgcontext()
     });
     pass_action = (sg_pass_action) {
         .colors[0] = { .action=SG_ACTION_CLEAR, .val={1.0f, 0.0f, 0.0f, 1.0f} }
@@ -454,9 +450,7 @@ Mainly some "missing features" for desktop apps:
 
 - define an application icon
 - change the window title on existing window
-- allow to programmatically activate and deactivate fullscreen
 - pointer lock
-- show/hide mouse cursor
 - allow to change mouse cursor image (at first only switch between system-provided standard images)
 
 ## sokol_audio.h planned features:
@@ -464,6 +458,81 @@ Mainly some "missing features" for desktop apps:
 - implement an alternative WebAudio backend using Audio Worklets and WASM threads
 
 # Updates
+
+- **01-Jun-2020**: sokol_app.h now allows to toggle to and from fullscreen
+programmatically and to query the current fullscreen state via 2 new
+functions: ```sapp_toggle_fullscreen()``` and ```sapp_is_fullscreen()```.
+Currently this is only implemented for Windows and macOS (not Linux).
+Thanks to @mattiasljungstrom for getting the feature started and providing
+the Win32 implementation!
+
+- **28-May-2020**: a small quality-of-life improvement for C++ coders: when the
+sokol headers are included into C++, all public API functions which take a
+pointer to a struct now have a C++ overload which instead takes a const-ref.
+This allows to move the struct initialization right into the function call
+just like in C99. For instance, in C99 one can write:
+    ```c
+    sg_buffer buf = sg_make_buffer(&(sg_buffer_desc){
+        .size = sizeof(vertices),
+        .type = SG_BUFFERTYPE_VERTEXBUFFER,
+        .content = vertices
+    });
+    ```
+    In C++ it isn't possible to take the address of an 'adhoc-initialized'
+    struct like this, but with the new reference-wrapper functions (and C++20
+    designated initialization) this should work now:
+    ```cpp
+    sg_buffer buf = sg_make_buffer({
+        .size = sizeof(vertices),
+        .type = SG_BUFFERTYPE_VERTEXBUFFER,
+        .content = vertices
+    });
+    ```
+    Many thanks to @garettbass for providing the PR!
+
+
+- **27-May-2020**: a new utility header [sokol_debugtext.h](https://github.com/floooh/sokol/blob/master/util/sokol_debugtext.h)
+for rendering simple ASCII text using vintage home computer fonts via sokol_gfx.h
+
+- **13-May-2020**: a new function in sokol_time.h to round a measured frame time
+to common display refresh rates: ```stm_round_to_common_refresh_rate()```.
+See the header documentation for the motivation behind this function.
+
+- **02-May-2020**: sokol_app.h: the 'programmatic quit' behaviour on the
+web-platform is now more in line with other platforms: calling
+```sapp_quit()``` will invoke the cleanup callback function, perform
+platform-specific cleanup (like unregistering JS event handlers), and finally
+exit the frame loop. In typical scenarios this isn't very useful (because
+usually the user will simply close the tab, which doesn't allow to run
+cleanup code), but it's useful for situations where the same
+code needs to run repeatedly on a web page. Many thanks to @caiiiycuk
+for providing the PR!
+
+- **30-Apr-2020**: experimental WebGPU backend and a minor breaking change:
+    - sokol_gfx.h: a new WebGPU backend, expect frequent breakage for a while
+      because the WebGPU API is still in flux
+    - a new header sokol_glue.h, with interop helper functions when specific combinations
+      of sokol headers are used together
+    - changes in the way sokol_gfx.h is initialized via a new layout of the
+      sg_desc structure
+    - sokol_gfx.h: a new ```sg_sampler_type``` enum which is required for
+      shader creation to tell the WebGPU backend about the sampler data types
+      (float, signed int, or unsigned int) used in the shader
+    - sokol_app.h: a handful new functions to query default framebuffer attributes (color- and
+      depth-buffer pixel formats, and MSAA sample count)
+    - sokol_app.h: WebGPU device and swapchain initialization (currently only
+      in the emscripten code path)
+    - [sokol-shdc](https://github.com/floooh/sokol-tools/blob/master/docs/sokol-shdc.md) has
+      been updated with WebGPU support (currently outputs SPIRV bytecode), and to output the new
+      ```sg_sampler_type``` enum in ```sg_shader_image_desc```
+    - [sokol-samples](https://github.com/floooh/sokol-samples/) has a new set of
+      backend-specific WebGPU samples, and the other samples have been updated
+      for the new sokol-gfx initialization
+    - ```pre-webgpu``` tags have been added to the [sokol](https://github.com/floooh/sokol/releases/tag/pre-webgpu), [sokol-samples](https://github.com/floooh/sokol-samples/releases/tag/pre-webgpu), [sokol-tools](https://github.com/floooh/sokol-tools/releases/tag/pre-webgpu)
+      and [sokol-tools-bin](https://github.com/floooh/sokol-tools-bin/releases/tag/pre-webgpu) github repositories (in case you need to continue working with
+      the older versions)
+    - please see this [blog post](https://floooh.github.io/2020/04/26/sokol-spring-2020-update.html)
+      for more details
 
 - **05-Apr-2020**: A bugfix in sokol_gl.h, the (fairly recent) optimization for
     merging draw calls contained a bug that could be triggered in an "empty"
