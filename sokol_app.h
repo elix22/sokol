@@ -3326,6 +3326,9 @@ _SOKOL_PRIVATE const _sapp_gl_fbconfig* _sapp_gl_choose_fbconfig(const _sapp_gl_
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #include <windowsx.h>
 #include <shellapi.h>
@@ -3359,7 +3362,6 @@ _SOKOL_PRIVATE const _sapp_gl_fbconfig* _sapp_gl_choose_fbconfig(const _sapp_gl_
 #ifndef COBJMACROS
 #define COBJMACROS
 #endif
-#include <windows.h>
 #include <d3d11.h>
 #include <dxgi.h>
 #endif
@@ -3719,6 +3721,7 @@ typedef int  GLint;
 #define GL_MAX_VERTEX_ATTRIBS 0x8869
 #define GL_CLAMP_TO_BORDER 0x812D
 #define GL_TEXTURE_BORDER_COLOR 0x1004
+#define GL_CURRENT_PROGRAM 0x8B8D
 
 typedef void  (GL_APIENTRY *PFN_glBindVertexArray)(GLuint array);
 static PFN_glBindVertexArray _sapp_glBindVertexArray;
@@ -7808,7 +7811,7 @@ SOKOL_API_IMPL int sapp_height(void) {
 }
 
 SOKOL_API_IMPL bool sapp_high_dpi(void) {
-    return _sapp.desc.high_dpi && (_sapp.dpi_scale > 1.5f);
+    return _sapp.desc.high_dpi && (_sapp.dpi_scale >= 1.5f);
 }
 
 SOKOL_API_IMPL float sapp_dpi_scale(void) {

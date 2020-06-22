@@ -6,7 +6,7 @@ Simple
 [STB-style](https://github.com/nothings/stb/blob/master/docs/stb_howto.txt)
 cross-platform libraries for C and C++, written in C.
 
-[See what's new](#updates) (**01-Jun-2020**: sapp_toggle_fullscreen() and sapp_is_fullscreen() functions)
+[See what's new](#updates) (**20-Jun-2020**: better support for older GPUs in sokol_gfx.h D3D11 backend)
 
 [Live Samples](https://floooh.github.io/sokol-html5/index.html) via WASM.
 
@@ -26,6 +26,7 @@ Utility libraries:
 - **sokol\_fontstash.h**: sokol_gl.h rendering backend for [fontstash](https://github.com/memononen/fontstash)
 - **sokol\_gfx\_imgui.h**: debug-inspection UI for sokol_gfx.h (implemented with Dear ImGui)
 - **sokol\_debugtext.h**: a simple text renderer using vintage home computer fonts
+- **sokol\_memtrack.h**: easily track memory allocations in sokol headers
 
 WebAssembly is a 'first-class citizen', one important motivation for the
 Sokol headers is to provide a collection of cross-platform APIs with a
@@ -458,6 +459,43 @@ Mainly some "missing features" for desktop apps:
 - implement an alternative WebAudio backend using Audio Worklets and WASM threads
 
 # Updates
+
+- **20-Jun-2020**: Some work to better support older DX10-level GPUs in the
+sokol_gfx.h D3D11 backend:
+    - sg_make_shader() now by default compiles HLSL shader code as shader model 4.0
+      (previously shader model 5.0 which caused problems with some older
+      Intel GPUs still in use, see this issue: https://github.com/floooh/sokol/issues/179)
+    - A new string item ```const char* d3d11_target``` in ```sg_shader_stage_desc``` now allows
+      to pass in the D3D shader model for compiling shaders. This defaults to 
+      "vs_4_0" for the vertex shader stage and "ps_4_0" for the fragment shader stage.
+      The minimal DX shader model for use with the sokol_gfx.h D3D11 backend is
+      shader model 4.0, because that's the first shader model supporting
+      constant buffers.
+    - The *sokol-shdc* shader compiler tool has a new output option ```hlsl4```
+      to generate HLSL4 source code and shader model 4.0 byte code.
+    - All embedded D3D shader byte code in the sokol utility headers has been
+      changed from shader model 5.0 to 4.0
+
+    If you are using sokol_gfx.h with sokol-shdc, please update both at the same time
+    to avoid compilation errors caused by the new ```sg_shader_stage_desc.d3d11_target```
+    item. The sg_shader_desc initialization code in sokol-shdc has now been made more
+    robust to prevent similar problems in the future.
+
+- **14-Jun-2020**: I have added a very simple utility header ```sokol_memtrack.h```
+which allows to track memory allocations in sokol headers (number and overall
+size of allocations) by overriding the macros SOKOL_MALLOC, SOKOL_CALLOC and
+SOKOL_FREE. Simply include ```sokol_memtrack.h``` before the other sokol
+header implementation includes to enable memory tracking in those headers
+(but remember that the sokol_memtrack.h implementation must only be included
+once in the whole project, so this only works when all other sokol header
+implementations are included in the same compilation unit).
+
+- **06-Jun-2020**: Some optimizations in the sokol_gfx.h GL backend to avoid
+  redundant GL calls in two areas: in the sg_begin_pass() calls when not
+  clearing the color- and depth-stencil-attachments, and in sg_apply_bindings()
+  when binding textures.  Everything should behave exactly as before, but if
+  you notice any problems in those areas, please file a bug. Many thanks to
+  @edubart for the PRs!
 
 - **01-Jun-2020**: sokol_app.h now allows to toggle to and from fullscreen
 programmatically and to query the current fullscreen state via 2 new
