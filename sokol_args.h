@@ -143,18 +143,19 @@
 
     WINMAIN AND ARGC / ARGV
     =======================
-    On Windows with WinMain() based apps, use the __argc and __argv global
-    variables provided by Windows. These are compatible with main(argc, argv)
-    and have already been converted to UTF-8 by Windows:
+    On Windows with WinMain() based apps, getting UTF8-encoded command line
+    arguments is a bit more complicated:
 
-        int WINAPI WinMain(...) {
-            sargs_setup(&(sargs_desc){
-                .argc = __argc,
-                .argv = __argv
-            });
-        }
+    First call GetCommandLineW(), this returns the entire command line
+    as UTF-16 string. Then call CommandLineToArgvW(), this parses the
+    command line string into the usual argc/argv format (but in UTF-16).
+    Finally convert the UTF-16 strings in argv[] into UTF-8 via
+    WideCharToMultiByte().
 
-    (this is also what sokol_app.h uses btw)
+    See the function _sapp_win32_command_line_to_utf8_argv() in sokol_app.h
+    for example code how to do this (if you're using sokol_app.h, it will
+    already convert the command line arguments to UTF-8 for you of course,
+    so you can plug them directly into sokol_app.h).
 
     API DOCUMENTATION
     =================
@@ -353,15 +354,13 @@ inline void sargs_setup(const sargs_desc& desc) { return sargs_setup(&desc); }
 #define _SARGS_MAX_ARGS_DEF (16)
 #define _SARGS_BUF_SIZE_DEF (16*1024)
 
-/* parser state (no parser needed on emscripten) */
-#if !defined(__EMSCRIPTEN__)
+/* parser state */
 #define _SARGS_EXPECT_KEY (1<<0)
 #define _SARGS_EXPECT_SEP (1<<1)
 #define _SARGS_EXPECT_VAL (1<<2)
 #define _SARGS_PARSING_KEY (1<<3)
 #define _SARGS_PARSING_VAL (1<<4)
 #define _SARGS_ERROR (1<<5)
-#endif
 
 /* a key/value pair struct */
 typedef struct {
@@ -378,13 +377,9 @@ typedef struct {
     int buf_pos;        /* current buffer position */
     char* buf;          /* character buffer, first char is reserved and zero for 'empty string' */
     bool valid;
-
-    /* arg parsing isn't needed on emscripten */
-    #if !defined(__EMSCRIPTEN__)
     uint32_t parse_state;
     char quote;         /* current quote char, 0 if not in a quote */
     bool in_escape;     /* currently in an escape sequence */
-    #endif
 } _sargs_state_t;
 static _sargs_state_t _sargs;
 
@@ -401,8 +396,7 @@ _SOKOL_PRIVATE const char* _sargs_str(int index) {
     return &_sargs.buf[index];
 }
 
-/*-- argument parser functions (not required on emscripten) ------------------*/
-#if !defined(__EMSCRIPTEN__)
+/*-- argument parser functions ------------------*/
 _SOKOL_PRIVATE void _sargs_expect_key(void) {
     _sargs.parse_state = _SARGS_EXPECT_KEY;
 }
@@ -608,7 +602,6 @@ _SOKOL_PRIVATE bool _sargs_parse_cargs(int argc, const char** argv) {
     _sargs.parse_state = 0;
     return retval;
 }
-#endif /* __EMSCRIPTEN__ */
 
 /*-- EMSCRIPTEN IMPLEMENTATION -----------------------------------------------*/
 #if defined(__EMSCRIPTEN__)
@@ -669,12 +662,13 @@ SOKOL_API_IMPL void sargs_setup(const sargs_desc* desc) {
     /* the first character in buf is reserved and always zero, this is the 'empty string' */
     _sargs.buf_pos = 1;
     _sargs.valid = true;
+
+    /* parse argc/argv */
+    _sargs_parse_cargs(desc->argc, (const char**) desc->argv);
+
     #if defined(__EMSCRIPTEN__)
-        /* on emscripten, ignore argc/argv, and parse the page URL instead */
+        /* on emscripten, also parse the page URL*/
         sargs_js_parse_url();
-    #else
-        /* on native platform, parse argc/argv */
-        _sargs_parse_cargs(desc->argc, (const char**) desc->argv);
     #endif
 }
 
