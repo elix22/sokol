@@ -1,5 +1,34 @@
 ## Updates
 
+- **02-Sep-2021**: some minor non-breaking additions:
+    - sokol_app.h: new events FOCUSED and UNFOCUSED to indicate that the
+      window has gained or lost the focused state (Win32: WM_SETFOCUS/WM_KILLFOCUS,
+      macOS: windowDidBecomeKey/windowDidResignKey, X11: FocusIn/FocusOut,
+      HTML5: focus/blur).
+    - sokol_app.h Emscripten backend: the input event keycode is now extracted
+      from the HTML5 code string which yields the actual unmapped virtual key code.
+
+- **21-Aug-2021**: some minor API tweaks in sokol_gl.h and sokol_debugtext.h,
+  one of them breaking (still minor though):
+    - sokol_gl.h has a new function ```sgl_default_context()``` which returns the
+      default context handle, it's the same as the global constant SGL_DEFAULT_CONTEXT,
+      but wrapping this in a function is better for language bindings
+    - ...and a similar function in sokol_debugtext.h: ```sdtx_default_context()```
+    - The sokol_gl.h function ```sgl_default_pipeline()``` has been renamed to
+      ```sgl_load_default_pipeline()```. This fits better with the related
+      function ```sgl_load_pipeline()``` and doesn't 'semantically clash'
+      with the new function sgl_default_context(). The sgl_default_pipeline()
+      function is rarely used, so it's quite unlikely that this change breaks
+      your code.
+
+- **19-Aug-2021**: sokol_gl.h gained rendering context support, this allows
+  sokol-gl to render into different sokol-gfx render passes. No changes are
+  needed for existing sokol-gl code. Check the updated
+  [header documentation](https://github.com/floooh/sokol/blob/master/util/sokol_gl.h)
+  and the new sample
+  [sgl-context-sapp](https://floooh.github.io/sokol-html5/sgl-context-sapp.html)
+  for details!
+
 - **21-Jun-2021**: A new utility header sokol_color.h has been added, which adds
   sokol_gfx.h-compatible named color constants and a handful initial utility
   functions. See the [header documentation](https://github.com/floooh/sokol/blob/master/util/sokol_color.h)
