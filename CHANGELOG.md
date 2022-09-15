@@ -1,5 +1,139 @@
 ## Updates
 
+- **10-Sep-2022**: sokol_app.h and sokol_args.h has been fixed for Emscripten 3.21, those headers
+  used the Emscripten Javascript helper function ```ccall()``` which is now part of the
+  'legacy runtime' and causes linker errors. Instead of ```ccall()``` sokol_app.h and sokol_args.h
+  now drop down to a lower level set of Emscripten JS helper functions (which hopefully won't
+  go away anytime soon).
+
+- **05-Aug-2022**: New officially supported and automatically updated language bindings for Odin:
+  https://github.com/floooh/sokol-odin (also see [gen_odin.py](https://github.com/floooh/sokol/blob/master/bindgen/gen_odin.py))
+
+- **10-Jul-2022**: New features in sokol_app.h and sokol_imgui.h:
+    - In sokol_app.h it's now possible to set a mouse cursor type from a number of predefined
+      types via the new function ```sapp_set_mouse_cursor(sapp_mouse_cursor cursor)```. The
+      available cursor types are compatible with GLFW and Dear ImGui. Supported platforms
+      are: macOS, linux, win32, uwp and web.
+    - ```sapp_show_mouse(bool shown)``` now also works on the web platform.
+    - In sokol_app.h, the poorly defined 'user cursor' feature has been removed (```sapp_desc.user_cursor```
+      and ```SAPP_EVENTTYPE_UPDATE_CURSOR```). This was a hack to allow changing the mouse cursor and
+      only worked on Win32 and macOS (with different behaviour). Since setting the cursor type
+      is now 'properly supported, this hack was removed.
+    - sokol_imgui.h will now set the cursor type via ```sapp_set_mouse_cursor()```. This can be
+      disabled with the new ```simgui_desc_t``` item ```disable_set_mouse_cursor```.
+    - sokol_imgui.h now automatically enables resizing windows from edges (not just the bottom-right corner),
+      this behavour can be disabled with the new ```simgui_desc_t``` item ```disable_windows_resize_from_edges```.
+    - sokol_imgui.h can now optionally write to the alpha channel (useful if you want to render the UI
+      into a separate render target, which is later composed onto the default framebuffer). The feature
+      is enabled with the new ```simgui_desc_t``` item ```write_alpha_channel```.
+
+  Many thanks to **@tomc1998** for the initial [Linux/X11 mouse cursor type PR](https://github.com/floooh/sokol/pull/678) and
+  **@luigi-rosso** for the [sokol_imgui.h alpha channel PR](https://github.com/floooh/sokol/pull/687)!
+
+- **03-Jul-2022**: A new sokol_gfx.h function ```bool sg_query_buffer_will_overflow(sg_buffer buf, size_t size)```
+which allows to check if a call to ```sg_append_buffer()``` would overflow the buffer. This
+is an alternative to the ```sg_query_buffer_overflow()``` function which only reports
+the overflow after the fact. Many thanks to @RandyGaul for the PR!
+
+- **29-Jun-2022**: In sokol_app.h with the D3D11 backend, if SOKOL_DEBUG is
+defined, and the D3D11 device creation fails, there's now a fallback code
+path which tries to create the device again without the D3D11_CREATE_DEVICE_DEBUG
+flag. Turns out the D3D11 debug support may suddenly stop working (just happened
+to me, indicated by the Win10 "Graphics Tool" feature being silently uninstalled
+and failing to install when asked to do so). This fix at least allows sokol_app.h
+applications compiled in debug mode to run, even if the D3D11 debug layer doesn't
+work.
+
+- **29-May-2022**: The code generation scripts for the
+[sokol-nim](https://github.com/floooh/sokol-nim) language bindings have been
+revised and updated, many thanks to Gustav Olsson for the PR! (I'm planning to
+spend a few more days integrating the bindings generation with Github Actions,
+so that it's easier to publish new bindings after updates to the sokol headers).
+
+- **26-May-2022**: The GL backend in sokol_app.h now allows to override the GL
+  context version via two new items in the ```sapp_desc``` struct:
+  ```sapp_desc.gl_major_version``` and ```sapp_desc.gl_minor_version```. The
+  default GL context version remains at 3.2. Overriding the GL version might make
+  sense if you're not using sokol_app.h together with sokol_gfx.h, or otherwise
+  want to call GL functions directly. Note that this only works for the
+  'desktop GL' backends (Windows, Linux and macOS), but not for the GLES backends
+  (Android, iOS, web). Furthermore, on macOS only the GL versions 3.2 and 4.1
+  are available (plus the special config major=1 minor=0 creates an
+  NSOpenGLProfileVersionLegacy context). In general: use at your risk :) Many
+  thanks to Github user @pplux for the PR!
+
+- **15-May-2022**: The way internal memory allocation can be overridden with
+  your own functions has been changed from global macros to callbacks
+  provided in the API setup call. For instance in sokol_gfx.h:
+
+  ```c
+  void* my_malloc(size_t size, void* userdata) {
+    (void)userdata; // unused
+    return malloc(size);
+  }
+
+  void my_free(void* ptr, void* userdata) {
+    (void)userdata; // unused
+    free(ptr);
+  }
+
+  //...
+    sg_setup(&(sg_desc){
+      //...
+      .allocator = {
+        .alloc = my_malloc,
+        .free = my_free,
+        .user_data = ...,
+      }
+    });
+  ```
+
+  sokol_gfx.h will now call ```my_malloc()``` and ```my_free()``` whenever it needs
+  to allocate or free memory (note however that allocations inside OS
+  functions or 3rd party libraries are not affected).
+
+  If no override functions are provided, the standard library functions ```malloc()``` and ```free()```
+  will be used, just as before.
+
+  This change breaks source compatibility in the following headers:
+
+    - **sokol_fontstash.h**: the function signature of ```sfons_create()``` has changed,
+      this now takes a pointer to a new ```sfons_desc_t``` struct instead of
+      individual parameters.
+    - **sokol_gfx_imgui.h** (NOT sokol_imgui.h!): likewise, the function signature of
+      ```sg_imgui_init()``` has changed, this now takes an additional parameter
+      which is a pointer to a new ```sg_imgui_desc_t``` struct.
+
+  All affected headers also have a preprocessor check for the outdated
+  macros ```SOKOL_MALLOC```, ```SOKOL_CALLOC``` and ```SOKOL_FREE``` and throw
+  a compilation error if those macros are detected.
+
+  (if configuration through macros is still desired this could be added back in
+  the future, but I figured that the new way is more flexible in most situations).
+
+  The header sokol_memtrack.h and the sample [restart-sapp](https://floooh.github.io/sokol-html5/restart-sapp.html) have been updated accordingly.
+
+  Also search for ```MEMORY ALLOCATION OVERRIDE``` in the header documentation block
+  for more details.
+
+- **14-May-2022**: added a helper function ```simgui_map_keycode()``` to
+  sokol_imgui.h to map sokol_app.h keycodes (```sapp_keycode```,
+  ```SAPP_KEYCODE_*```) to Dear ImGui keycodes (```ImGuiKey```, ```ImGuiKey_*```).
+  If you're using Dear ImGui function to check for key input, you'll need to
+  update the code like this:
+
+  - Old:
+    ```cpp
+    ImGui::IsKeyPressed(SAPP_KEYCODE_A);
+    ```
+  - New:
+    ```cpp
+    ImGui::IsKeyPressed(simgui_map_keycode(SAPP_KEYCODE_A));
+    ```
+
+  This was basically 'fallout' from rewriting the input system in sokol_imgui.h
+  to the new evented IO system in Dear ImGui.
+
 - **08-Feb-2022**: sokol_imgui.h has been updated for Dear ImGui 1.87:
   - sokol_imgui.h's input code has been rewritten to use the new evented IO
     system and extended virtual key codes in Dear ImGui
