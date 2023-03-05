@@ -12,6 +12,7 @@ import os, shutil, sys
 import gen_util as util
 
 module_names = {
+    'slog_':    'log',
     'sg_':      'gfx',
     'sapp_':    'app',
     'stm_':     'time',
@@ -22,6 +23,7 @@ module_names = {
 }
 
 c_source_paths = {
+    'slog_':    'sokol-zig/src/sokol/c/sokol_log.c',
     'sg_':      'sokol-zig/src/sokol/c/sokol_gfx.c',
     'sapp_':    'sokol-zig/src/sokol/c/sokol_app.c',
     'stm_':     'sokol-zig/src/sokol/c/sokol_time.c',
@@ -36,6 +38,11 @@ ignores = [
     'sdtx_vprintf',
     'sg_install_trace_hooks',
     'sg_trace_hooks',
+]
+
+# functions that need to be exposed as 'raw' C callbacks without a Zig wrapper function
+c_callbacks = [
+    'slog_func'
 ]
 
 # NOTE: syntax for function results: "func_name.RESULT"
@@ -328,7 +335,7 @@ def gen_struct(decl, prefix):
         elif is_const_prim_ptr(field_type):
             l(f"    {field_name}: ?[*]const {as_zig_prim_type(util.extract_ptr_type(field_type))} = null,")
         elif util.is_func_ptr(field_type):
-            l(f"    {field_name}: ?meta.FnPtr(fn({funcptr_args_c(field_type, prefix)}) callconv(.C) {funcptr_result_c(field_type)}) = null,")
+            l(f"    {field_name}: ?*const fn({funcptr_args_c(field_type, prefix)}) callconv(.C) {funcptr_result_c(field_type)} = null,")
         elif util.is_1d_array_type(field_type):
             array_type = util.extract_array_type(field_type)
             array_sizes = util.extract_array_sizes(field_type)
@@ -391,31 +398,35 @@ def gen_func_c(decl, prefix):
 def gen_func_zig(decl, prefix):
     c_func_name = decl['name']
     zig_func_name = util.as_lower_camel_case(check_override(decl['name']), prefix)
-    zig_res_type = funcdecl_result_zig(decl, prefix)
-    l(f"pub fn {zig_func_name}({funcdecl_args_zig(decl, prefix)}) {zig_res_type} {{")
-    if is_zig_string(zig_res_type):
-        # special case: convert C string to Zig string slice
-        s = f"    return cStrToZig({c_func_name}("
-    elif zig_res_type != 'void':
-        s = f"    return {c_func_name}("
+    if c_func_name in c_callbacks:
+        # a simple forwarded C callback function
+        l(f"pub const {zig_func_name} = {c_func_name};")
     else:
-        s = f"    {c_func_name}("
-    for i, param_decl in enumerate(decl['params']):
-        if i > 0:
-            s += ", "
-        arg_name = param_decl['name']
-        arg_type = param_decl['type']
-        if is_const_struct_ptr(arg_type):
-            s += f"&{arg_name}"
-        elif util.is_string_ptr(arg_type):
-            s += f"@ptrCast([*c]const u8,{arg_name})"
+        zig_res_type = funcdecl_result_zig(decl, prefix)
+        l(f"pub fn {zig_func_name}({funcdecl_args_zig(decl, prefix)}) {zig_res_type} {{")
+        if is_zig_string(zig_res_type):
+            # special case: convert C string to Zig string slice
+            s = f"    return cStrToZig({c_func_name}("
+        elif zig_res_type != 'void':
+            s = f"    return {c_func_name}("
         else:
-            s += arg_name
-    if is_zig_string(zig_res_type):
-        s += ")"
-    s += ");"
-    l(s)
-    l("}")
+            s = f"    {c_func_name}("
+        for i, param_decl in enumerate(decl['params']):
+            if i > 0:
+                s += ", "
+            arg_name = param_decl['name']
+            arg_type = param_decl['type']
+            if is_const_struct_ptr(arg_type):
+                s += f"&{arg_name}"
+            elif util.is_string_ptr(arg_type):
+                s += f"@ptrCast([*c]const u8,{arg_name})"
+            else:
+                s += arg_name
+        if is_zig_string(zig_res_type):
+            s += ")"
+        s += ");"
+        l(s)
+        l("}")
 
 def pre_parse(inp):
     global struct_types
@@ -433,7 +444,6 @@ def pre_parse(inp):
 
 def gen_imports(inp, dep_prefixes):
     l('const builtin = @import("builtin");')
-    l('const meta = @import("std").meta;')
     for dep_prefix in dep_prefixes:
         dep_module_name = module_names[dep_prefix]
         l(f'const {dep_prefix[:-1]} = @import("{dep_module_name}.zig");')
@@ -457,10 +467,7 @@ def gen_helpers(inp):
         l('            }')
         l('        },')
         l('        .Struct, .Array => {')
-        l('            switch (builtin.zig_backend) {')
-        l('                .stage1 => return .{ .ptr = &val, .size = @sizeOf(@TypeOf(val)) },')
-        l('                else => @compileError("Structs and arrays must be passed as pointers to asRange"),')
-        l('            }')
+        l('            @compileError("Structs and arrays must be passed as pointers to asRange");')
         l('        },')
         l('        else => {')
         l('            @compileError("Cannot convert to range!");')
