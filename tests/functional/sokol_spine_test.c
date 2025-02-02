@@ -15,7 +15,7 @@ static void log_func(const char* tag, uint32_t log_level, uint32_t log_item, con
     last_logitem = log_item;
 }
 
-static void init() {
+static void init(void) {
     last_logitem = SSPINE_LOGITEM_OK;
     sg_setup(&(sg_desc){0});
     sspine_setup(&(sspine_desc){ .logger = { .func = log_func } });
@@ -29,7 +29,7 @@ static void init_with_desc(const sspine_desc* desc) {
     sspine_setup(&desc1);
 }
 
-static void shutdown() {
+static void shutdown(void) {
     sspine_shutdown();
     sg_shutdown();
 }
@@ -176,8 +176,8 @@ UTEST(sokol_spine, atlas_image_info) {
     T(strcmp(img_info.filename.cstr, "spineboy.png") == 0);
     T(img_info.min_filter == SG_FILTER_LINEAR);
     T(img_info.mag_filter == SG_FILTER_LINEAR);
-    T(img_info.wrap_u == SG_WRAP_MIRRORED_REPEAT);
-    T(img_info.wrap_v == SG_WRAP_MIRRORED_REPEAT);
+    T(img_info.wrap_u == SG_WRAP_CLAMP_TO_EDGE);
+    T(img_info.wrap_v == SG_WRAP_CLAMP_TO_EDGE);
     T(img_info.width == 1024);
     T(img_info.height == 256);
     T(img_info.premul_alpha == false);
@@ -190,8 +190,9 @@ UTEST(sokol_spine, atlas_with_overrides) {
     sspine_atlas atlas = sspine_make_atlas(&(sspine_atlas_desc){
         .data = atlas_data,
         .override = {
-            .min_filter = SG_FILTER_NEAREST_MIPMAP_NEAREST,
+            .min_filter = SG_FILTER_NEAREST,
             .mag_filter = SG_FILTER_NEAREST,
+            .mipmap_filter = SG_FILTER_LINEAR,
             .wrap_u = SG_WRAP_REPEAT,
             .wrap_v = SG_WRAP_CLAMP_TO_EDGE,
             .premul_alpha_enabled = true,
@@ -204,8 +205,9 @@ UTEST(sokol_spine, atlas_with_overrides) {
     T(img_info.sgimage.id != SG_INVALID_ID);
     T(sg_query_image_state(img_info.sgimage) == SG_RESOURCESTATE_ALLOC);
     T(strcmp(img_info.filename.cstr, "spineboy.png") == 0);
-    T(img_info.min_filter == SG_FILTER_NEAREST_MIPMAP_NEAREST);
+    T(img_info.min_filter == SG_FILTER_NEAREST);
     T(img_info.mag_filter == SG_FILTER_NEAREST);
+    T(img_info.mipmap_filter == SG_FILTER_LINEAR);
     T(img_info.wrap_u == SG_WRAP_REPEAT);
     T(img_info.wrap_v == SG_WRAP_CLAMP_TO_EDGE);
     T(img_info.width == 1024);
@@ -593,8 +595,8 @@ UTEST(sokol_spine, get_atlas_page_info) {
     T(strcmp(info.image.filename.cstr, "spineboy.png") == 0);
     T(info.image.min_filter == SG_FILTER_LINEAR);
     T(info.image.mag_filter == SG_FILTER_LINEAR);
-    T(info.image.wrap_u == SG_WRAP_MIRRORED_REPEAT);
-    T(info.image.wrap_v == SG_WRAP_MIRRORED_REPEAT);
+    T(info.image.wrap_u == SG_WRAP_CLAMP_TO_EDGE);
+    T(info.image.wrap_v == SG_WRAP_CLAMP_TO_EDGE);
     T(info.image.width == 1024);
     T(info.image.height == 256);
     T(info.image.premul_alpha == false);
@@ -636,8 +638,9 @@ UTEST(sokol_spine, atlas_get_atlas_page_info_with_overrides) {
     sspine_atlas atlas = sspine_make_atlas(&(sspine_atlas_desc){
         .data = atlas_data,
         .override = {
-            .min_filter = SG_FILTER_NEAREST_MIPMAP_NEAREST,
+            .min_filter = SG_FILTER_NEAREST,
             .mag_filter = SG_FILTER_NEAREST,
+            .mipmap_filter = SG_FILTER_NEAREST,
             .wrap_u = SG_WRAP_REPEAT,
             .wrap_v = SG_WRAP_CLAMP_TO_EDGE,
             .premul_alpha_enabled = true,
@@ -652,13 +655,15 @@ UTEST(sokol_spine, atlas_get_atlas_page_info_with_overrides) {
     T(strcmp(info.image.filename.cstr, "spineboy.png") == 0);
     T(info.image.min_filter == SG_FILTER_LINEAR);
     T(info.image.mag_filter == SG_FILTER_LINEAR);
-    T(info.image.wrap_u == SG_WRAP_MIRRORED_REPEAT);
-    T(info.image.wrap_v == SG_WRAP_MIRRORED_REPEAT);
+    T(info.image.mipmap_filter == SG_FILTER_NEAREST);
+    T(info.image.wrap_u == SG_WRAP_CLAMP_TO_EDGE);
+    T(info.image.wrap_v == SG_WRAP_CLAMP_TO_EDGE);
     T(info.image.width == 1024);
     T(info.image.height == 256);
     T(info.image.premul_alpha == true); // FIXME: hmm, this is actually inconsistent
-    T(info.overrides.min_filter == SG_FILTER_NEAREST_MIPMAP_NEAREST);
+    T(info.overrides.min_filter == SG_FILTER_NEAREST);
     T(info.overrides.mag_filter == SG_FILTER_NEAREST);
+    T(info.overrides.mipmap_filter == SG_FILTER_NEAREST);
     T(info.overrides.wrap_u == SG_WRAP_REPEAT);
     T(info.overrides.wrap_v == SG_WRAP_CLAMP_TO_EDGE);
     T(info.overrides.premul_alpha_enabled);

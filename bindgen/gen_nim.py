@@ -13,24 +13,24 @@ module_names = {
     'slog_':    'log',
     'sg_':      'gfx',
     'sapp_':    'app',
-    'sapp_sg':  'glue',
     'stm_':     'time',
     'saudio_':  'audio',
     'sgl_':     'gl',
     'sdtx_':    'debugtext',
     'sshape_':  'shape',
+    'sglue_':   'glue',
 }
 
 c_source_paths = {
     'slog_':    'sokol-nim/src/sokol/c/sokol_log.c',
     'sg_':      'sokol-nim/src/sokol/c/sokol_gfx.c',
     'sapp_':    'sokol-nim/src/sokol/c/sokol_app.c',
-    'sapp_sg':  'sokol-nim/src/sokol/c/sokol_glue.c',
     'stm_':     'sokol-nim/src/sokol/c/sokol_time.c',
     'saudio_':  'sokol-nim/src/sokol/c/sokol_audio.c',
     'sgl_':     'sokol-nim/src/sokol/c/sokol_gl.c',
     'sdtx_':    'sokol-nim/src/sokol/c/sokol_debugtext.c',
     'sshape_':  'sokol-nim/src/sokol/c/sokol_shape.c',
+    'sglue_':   'sokol-nim/src/sokol/c/sokol_glue.c',
 }
 
 c_callbacks = [
@@ -46,8 +46,6 @@ overrides = {
     'sgl_error':                    'sgl_get_error',
     'sgl_deg':                      'sgl_as_degrees',
     'sgl_rad':                      'sgl_as_radians',
-    'sg_context_desc.color_format': 'int',
-    'sg_context_desc.depth_format': 'int',
     'SGL_NO_ERROR':                 'SGL_ERROR_NO_ERROR',
     'SG_BUFFERTYPE_VERTEXBUFFER':   'SG_BUFFERTYPE_VERTEX_BUFFER',
     'SG_BUFFERTYPE_INDEXBUFFER':    'SG_BUFFERTYPE_INDEX_BUFFER',
@@ -59,6 +57,8 @@ overrides = {
 
 enumPrefixOverrides = {
     # sokol_gfx.h
+    'LOADACTION': 'loadAction',
+    'STOREACTION': 'storeAction',
     'PIXELFORMAT': 'pixelFormat',
     'RESOURCESTATE': 'resourceState',
     'BUFFERTYPE': 'bufferType',
@@ -435,7 +435,7 @@ def gen_func_nim(decl, prefix):
             arg_name = param_decl['name']
             arg_type = param_decl['type']
             if is_const_struct_ptr(arg_type):
-                s += f"unsafeAddr({arg_name})"
+                s += f"addr({arg_name})"
             else:
                 s += arg_name
         s += ")"
@@ -453,15 +453,15 @@ def gen_array_converters(decl, prefix):
             if util.is_1d_array_type(field['type']):
                 n = array_sizes[0]
                 l(f'converter to{struct_name}{field_name}*[N:static[int]](items: array[N, {array_base_type}]): array[{n}, {array_base_type}] =')
-                l(f'  static: assert(N < {n})')
+                l(f'  static: assert(N <= {n})')
                 l(f'  for index,item in items.pairs: result[index]=item')
                 l('')
             elif util.is_2d_array_type(field['type']):
                 x = array_sizes[1]
                 y = array_sizes[0]
                 l(f'converter to{struct_name}{field_name}*[Y:static[int], X:static[int]](items: array[Y, array[X, {array_base_type}]]): array[{y}, array[{x}, {array_base_type}]] =')
-                l(f'  static: assert(X < {x})')
-                l(f'  static: assert(Y < {y})')
+                l(f'  static: assert(X <= {x})')
+                l(f'  static: assert(Y <= {y})')
                 l(f'  for indexY,itemY in items.pairs:')
                 l(f'    for indexX, itemX in itemY.pairs:')
                 l(f'      result[indexY][indexX] = itemX')
@@ -489,31 +489,44 @@ def gen_imports(inp, dep_prefixes):
 def gen_extra(inp):
     if inp['prefix'] in ['sg_']:
         # FIXME: remove when sokol-shdc has been integrated!
-        l('when defined gl:')
+        l('when defined emscripten:')
         l('  const gl*    = true')
         l('  const d3d11* = false')
         l('  const metal* = false')
+        l('  const emscripten* = true')
+        l('elif defined gl:')
+        l('  const gl*    = true')
+        l('  const d3d11* = false')
+        l('  const metal* = false')
+        l('  const emscripten* = false')
         l('elif defined windows:')
         l('  const gl*    = false')
         l('  const d3d11* = true')
         l('  const metal* = false')
+        l('  const emscripten* = false')
         l('elif defined macosx:')
         l('  const gl*    = false')
         l('  const d3d11* = false')
         l('  const metal* = true')
+        l('  const emscripten* = false')
         l('elif defined linux:')
         l('  const gl*    = true')
         l('  const d3d11* = false')
         l('  const metal* = false')
+        l('  const emscripten* = false')
         l('else:')
         l('  error("unsupported platform")')
         l('')
     if inp['prefix'] in ['sg_', 'sapp_']:
-        l('when defined windows:')
+        l('when defined emscripten:')
+        l('  {.passl:"-lGL -ldl".}')
+        l('  {.passc:"-DSOKOL_GLES3".}')
+        l('  {.passL: "-s MIN_WEBGL_VERSION=2 -s MAX_WEBGL_VERSION=2".}')
+        l('elif defined windows:')
         l('  when not defined vcc:')
         l('    {.passl:"-lkernel32 -luser32 -lshell32 -lgdi32".}')
         l('  when defined gl:')
-        l('    {.passc:"-DSOKOL_GLCORE33".}')
+        l('    {.passc:"-DSOKOL_GLCORE".}')
         l('  else:')
         l('    {.passc:"-DSOKOL_D3D11".}')
         l('    when not defined vcc:')
@@ -522,13 +535,13 @@ def gen_extra(inp):
         l('  {.passc:"-x objective-c".}')
         l('  {.passl:"-framework Cocoa -framework QuartzCore".}')
         l('  when defined gl:')
-        l('    {.passc:"-DSOKOL_GLCORE33".}')
+        l('    {.passc:"-DSOKOL_GLCORE".}')
         l('    {.passl:"-framework OpenGL".}')
         l('  else:')
         l('    {.passc:"-DSOKOL_METAL".}')
         l('    {.passl:"-framework Metal -framework MetalKit".}')
         l('elif defined linux:')
-        l('  {.passc:"-DSOKOL_GLCORE33".}')
+        l('  {.passc:"-DSOKOL_GLCORE".}')
         l('  {.passl:"-lX11 -lXi -lXcursor -lGL -lm -ldl -lpthread".}')
         l('else:')
         l('  error("unsupported platform")')
@@ -540,7 +553,8 @@ def gen_extra(inp):
         l('elif defined macosx:')
         l('  {.passl:"-framework AudioToolbox".}')
         l('elif defined linux:')
-        l('  {.passl:"-lasound -lm -lpthread".}')
+        l('  when not defined emscripten:')
+        l('    {.passl:"-lasound -lm -lpthread".}')
         l('else:')
         l('  error("unsupported platform")')
         l('')
@@ -560,10 +574,12 @@ def gen_extra(inp):
     #if inp['prefix'] in ['sg_', 'sdtx_', 'sshape_']:
     #    l('# helper function to convert "anything" into a Range')
     #    l('converter to_Range*[T](source: T): Range =')
-    #    l('  Range(addr: source.unsafeAddr, size: source.sizeof.uint)')
+    #    l('  Range(addr: source.addr, size: source.sizeof.uint)')
     #    l('')
     c_source_path = '/'.join(c_source_paths[inp['prefix']].split('/')[3:])
     l('{.passc:"-DSOKOL_NIM_IMPL".}')
+    l('when defined(release):')
+    l('  {.passc:"-DNDEBUG".}')
     l(f'{{.compile:"{c_source_path}".}}')
 
 def gen_module(inp, dep_prefixes):

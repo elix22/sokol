@@ -11,8 +11,9 @@
 
 #define T(b) EXPECT_TRUE(b)
 
+#define MAX_LOGITEMS (32)
 static int num_log_called = 0;
-static sg_log_item log_item;
+static sg_log_item log_items[MAX_LOGITEMS];
 
 static void test_logger(const char* tag, uint32_t log_level, uint32_t log_item_id, const char* message_or_null, uint32_t line_nr, const char* filename_or_null, void* user_data) {
     (void)tag;
@@ -21,15 +22,21 @@ static void test_logger(const char* tag, uint32_t log_level, uint32_t log_item_i
     (void)line_nr;
     (void)filename_or_null;
     (void)user_data;
-    num_log_called++;
-    log_item = log_item_id;
+    if (num_log_called < MAX_LOGITEMS) {
+        log_items[num_log_called++] = log_item_id;
+    }
     if (message_or_null) {
         printf("%s\n", message_or_null);
     }
 }
 
-static void setup(const sg_desc* desc) {
+static void reset_log_items(void) {
     num_log_called = 0;
+    memset(log_items, 0, sizeof(log_items));
+}
+
+static void setup(const sg_desc* desc) {
+    reset_log_items();
     sg_desc desc_with_logger = *desc;
     desc_with_logger.logger.func = test_logger;
     sg_setup(&desc_with_logger);
@@ -61,14 +68,14 @@ static sg_pipeline create_pipeline(void) {
     });
 }
 
-static sg_pass create_pass(void) {
+static sg_attachments create_attachments(void) {
     sg_image_desc img_desc = {
         .render_target = true,
         .width = 128,
         .height = 128,
     };
-    return sg_make_pass(&(sg_pass_desc){
-        .color_attachments = {
+    return sg_make_attachments(&(sg_attachments_desc){
+        .colors = {
             [0].image = sg_make_image(&img_desc),
             [1].image = sg_make_image(&img_desc),
             [2].image = sg_make_image(&img_desc)
@@ -86,18 +93,18 @@ UTEST(sokol_gfx, init_shutdown) {
 UTEST(sokol_gfx, query_desc) {
     setup(&(sg_desc){
         .buffer_pool_size = 1024,
+        .sampler_pool_size = 8,
         .shader_pool_size = 128,
-        .pass_pool_size = 64,
+        .attachments_pool_size = 64,
     });
     const sg_desc desc = sg_query_desc();
     T(desc.buffer_pool_size == 1024);
     T(desc.image_pool_size == _SG_DEFAULT_IMAGE_POOL_SIZE);
+    T(desc.sampler_pool_size == 8);
     T(desc.shader_pool_size == 128);
     T(desc.pipeline_pool_size == _SG_DEFAULT_PIPELINE_POOL_SIZE);
-    T(desc.pass_pool_size == 64);
-    T(desc.context_pool_size == _SG_DEFAULT_CONTEXT_POOL_SIZE);
+    T(desc.attachments_pool_size == 64);
     T(desc.uniform_buffer_size == _SG_DEFAULT_UB_SIZE);
-    T(desc.sampler_cache_size == _SG_DEFAULT_SAMPLER_CACHE_CAPACITY);
     sg_shutdown();
 }
 
@@ -113,8 +120,7 @@ UTEST(sokol_gfx, pool_size) {
         .image_pool_size = 2048,
         .shader_pool_size = 128,
         .pipeline_pool_size = 256,
-        .pass_pool_size = 64,
-        .context_pool_size = 64
+        .attachments_pool_size = 64,
     });
     T(sg_isvalid());
     /* pool slot 0 is reserved (this is the "invalid slot") */
@@ -122,14 +128,12 @@ UTEST(sokol_gfx, pool_size) {
     T(_sg.pools.image_pool.size == 2049);
     T(_sg.pools.shader_pool.size == 129);
     T(_sg.pools.pipeline_pool.size == 257);
-    T(_sg.pools.pass_pool.size == 65);
-    T(_sg.pools.context_pool.size == 65);
+    T(_sg.pools.attachments_pool.size == 65);
     T(_sg.pools.buffer_pool.queue_top == 1024);
     T(_sg.pools.image_pool.queue_top == 2048);
     T(_sg.pools.shader_pool.queue_top == 128);
     T(_sg.pools.pipeline_pool.queue_top == 256);
-    T(_sg.pools.pass_pool.queue_top == 64);
-    T(_sg.pools.context_pool.queue_top == 63);  /* default context has been created already */
+    T(_sg.pools.attachments_pool.queue_top == 64);
     sg_shutdown();
 }
 
@@ -191,6 +195,36 @@ UTEST(sokol_gfx, alloc_fail_destroy_images) {
         sg_destroy_image(img[i]);
         T(sg_query_image_state(img[i]) == SG_RESOURCESTATE_INVALID);
         T((i+1) == _sg.pools.image_pool.queue_top);
+    }
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, alloc_fail_destroy_samplers) {
+    setup(&(sg_desc){
+        .sampler_pool_size = 3,
+    });
+
+    sg_sampler smp[3] = { {0} };
+    for (int i = 0; i < 3; i++) {
+        smp[i] = sg_alloc_sampler();
+        T(smp[i].id != SG_INVALID_ID);
+        T((2-i) == _sg.pools.sampler_pool.queue_top);
+        T(sg_query_sampler_state(smp[i]) == SG_RESOURCESTATE_ALLOC);
+    }
+    // the next alloc will fail because the pool is exhausted
+    sg_sampler s3 = sg_alloc_sampler();
+    T(s3.id == SG_INVALID_ID);
+    T(sg_query_sampler_state(s3) == SG_RESOURCESTATE_INVALID);
+
+    // before destroying, the resources must be either in valid or failed state
+    for (int i = 0; i < 3; i++) {
+        sg_fail_sampler(smp[i]);
+        T(sg_query_sampler_state(smp[i]) == SG_RESOURCESTATE_FAILED);
+    }
+    for (int i = 0; i < 3; i++) {
+        sg_destroy_sampler(smp[i]);
+        T(sg_query_sampler_state(smp[i]) == SG_RESOURCESTATE_INVALID);
+        T((i+1) == _sg.pools.sampler_pool.queue_top);
     }
     sg_shutdown();
 }
@@ -258,33 +292,33 @@ UTEST(sokol_gfx, alloc_fail_destroy_pipelines) {
     sg_shutdown();
 }
 
-UTEST(sokol_gfx, alloc_fail_destroy_passes) {
+UTEST(sokol_gfx, alloc_fail_destroy_attachments) {
     setup(&(sg_desc){
-        .pass_pool_size = 3
+        .attachments_pool_size = 3
     });
     T(sg_isvalid());
 
-    sg_pass pass[3] = { {0} };
+    sg_attachments atts[3] = { {0} };
     for (int i = 0; i < 3; i++) {
-        pass[i] = sg_alloc_pass();
-        T(pass[i].id != SG_INVALID_ID);
-        T((2-i) == _sg.pools.pass_pool.queue_top);
-        T(sg_query_pass_state(pass[i]) == SG_RESOURCESTATE_ALLOC);
+        atts[i] = sg_alloc_attachments();
+        T(atts[i].id != SG_INVALID_ID);
+        T((2-i) == _sg.pools.attachments_pool.queue_top);
+        T(sg_query_attachments_state(atts[i]) == SG_RESOURCESTATE_ALLOC);
     }
     /* the next alloc will fail because the pool is exhausted */
-    sg_pass p3 = sg_alloc_pass();
-    T(p3.id == SG_INVALID_ID);
-    T(sg_query_pass_state(p3) == SG_RESOURCESTATE_INVALID);
+    sg_attachments a3 = sg_alloc_attachments();
+    T(a3.id == SG_INVALID_ID);
+    T(sg_query_attachments_state(a3) == SG_RESOURCESTATE_INVALID);
 
     /* before destroying, the resources must be either in valid or failed state */
     for (int i = 0; i < 3; i++) {
-        sg_fail_pass(pass[i]);
-        T(sg_query_pass_state(pass[i]) == SG_RESOURCESTATE_FAILED);
+        sg_fail_attachments(atts[i]);
+        T(sg_query_attachments_state(atts[i]) == SG_RESOURCESTATE_FAILED);
     }
     for (int i = 0; i < 3; i++) {
-        sg_destroy_pass(pass[i]);
-        T(sg_query_pass_state(pass[i]) == SG_RESOURCESTATE_INVALID);
-        T((i+1) == _sg.pools.pass_pool.queue_top);
+        sg_destroy_attachments(atts[i]);
+        T(sg_query_attachments_state(atts[i]) == SG_RESOURCESTATE_INVALID);
+        T((i+1) == _sg.pools.attachments_pool.queue_top);
     }
     sg_shutdown();
 }
@@ -307,7 +341,6 @@ UTEST(sokol_gfx, make_destroy_buffers) {
         const _sg_buffer_t* bufptr = _sg_lookup_buffer(&_sg.pools, buf[i].id);
         T(bufptr);
         T(bufptr->slot.id == buf[i].id);
-        T(bufptr->slot.ctx_id == _sg.active_context.id);
         T(bufptr->slot.state == SG_RESOURCESTATE_VALID);
         T(bufptr->cmn.size == sizeof(data));
         T(bufptr->cmn.append_pos == 0);
@@ -319,7 +352,7 @@ UTEST(sokol_gfx, make_destroy_buffers) {
         T(bufptr->cmn.num_slots == 1);
         T(bufptr->cmn.active_slot == 0);
     }
-    /* trying to create another one fails because buffer is exhausted */
+    /* trying to create another one fails because pool is exhausted */
     T(sg_make_buffer(&desc).id == SG_INVALID_ID);
 
     for (int i = 0; i < 3; i++) {
@@ -352,7 +385,6 @@ UTEST(sokol_gfx, make_destroy_images) {
         const _sg_image_t* imgptr = _sg_lookup_image(&_sg.pools, img[i].id);
         T(imgptr);
         T(imgptr->slot.id == img[i].id);
-        T(imgptr->slot.ctx_id == _sg.active_context.id);
         T(imgptr->slot.state == SG_RESOURCESTATE_VALID);
         T(imgptr->cmn.type == SG_IMAGETYPE_2D);
         T(!imgptr->cmn.render_target);
@@ -363,23 +395,57 @@ UTEST(sokol_gfx, make_destroy_images) {
         T(imgptr->cmn.usage == SG_USAGE_IMMUTABLE);
         T(imgptr->cmn.pixel_format == SG_PIXELFORMAT_RGBA8);
         T(imgptr->cmn.sample_count == 1);
-        T(imgptr->cmn.min_filter == SG_FILTER_NEAREST);
-        T(imgptr->cmn.mag_filter == SG_FILTER_NEAREST);
-        T(imgptr->cmn.wrap_u == SG_WRAP_REPEAT);
-        T(imgptr->cmn.wrap_v == SG_WRAP_REPEAT);
-        T(imgptr->cmn.wrap_w == SG_WRAP_REPEAT);
-        T(imgptr->cmn.max_anisotropy == 1);
         T(imgptr->cmn.upd_frame_index == 0);
         T(imgptr->cmn.num_slots == 1);
         T(imgptr->cmn.active_slot == 0);
     }
-    /* trying to create another one fails because buffer is exhausted */
+    // trying to create another one fails because pool is exhausted
     T(sg_make_image(&desc).id == SG_INVALID_ID);
 
     for (int i = 0; i < 3; i++) {
         sg_destroy_image(img[i]);
         T(sg_query_image_state(img[i]) == SG_RESOURCESTATE_INVALID);
         T((i+1) == _sg.pools.image_pool.queue_top);
+    }
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, make_destroy_samplers) {
+    setup(&(sg_desc){
+        .sampler_pool_size = 3
+    });
+    T(sg_isvalid());
+
+    sg_sampler smp[3] = { {0} };
+    sg_sampler_desc desc = { 0 };
+    for (int i = 0; i < 3; i++) {
+        smp[i] = sg_make_sampler(&desc);
+        T(smp[i].id != SG_INVALID_ID);
+        T((2-i) == _sg.pools.sampler_pool.queue_top);
+        T(sg_query_sampler_state(smp[i]) == SG_RESOURCESTATE_VALID);
+        const _sg_sampler_t* smpptr = _sg_lookup_sampler(&_sg.pools, smp[i].id);
+        T(smpptr);
+        T(smpptr->slot.id == smp[i].id);
+        T(smpptr->slot.state == SG_RESOURCESTATE_VALID);
+        T(smpptr->cmn.min_filter == SG_FILTER_NEAREST);
+        T(smpptr->cmn.mag_filter == SG_FILTER_NEAREST);
+        T(smpptr->cmn.mipmap_filter == SG_FILTER_NEAREST);
+        T(smpptr->cmn.wrap_u == SG_WRAP_REPEAT);
+        T(smpptr->cmn.wrap_v == SG_WRAP_REPEAT);
+        T(smpptr->cmn.wrap_w == SG_WRAP_REPEAT);
+        T(smpptr->cmn.min_lod == 0.0f);
+        T(smpptr->cmn.max_lod == FLT_MAX);
+        T(smpptr->cmn.border_color == SG_BORDERCOLOR_OPAQUE_BLACK);
+        T(smpptr->cmn.compare == SG_COMPAREFUNC_NEVER);
+        T(smpptr->cmn.max_anisotropy == 1);
+    }
+    // trying to create another one fails because pool is exhausted
+    T(sg_make_sampler(&desc).id == SG_INVALID_ID);
+
+    for (int i = 0; i < 3; i++) {
+        sg_destroy_sampler(smp[i]);
+        T(sg_query_sampler_state(smp[i]) == SG_RESOURCESTATE_INVALID);
+        T((i+1) == _sg.pools.sampler_pool.queue_top);
     }
     sg_shutdown();
 }
@@ -392,7 +458,8 @@ UTEST(sokol_gfx, make_destroy_shaders) {
 
     sg_shader shd[3] = { {0} };
     sg_shader_desc desc = {
-        .vs.uniform_blocks[0] = {
+        .uniform_blocks[0] = {
+            .stage = SG_SHADERSTAGE_VERTEX,
             .size = 16
         }
     };
@@ -404,15 +471,11 @@ UTEST(sokol_gfx, make_destroy_shaders) {
         const _sg_shader_t* shdptr = _sg_lookup_shader(&_sg.pools, shd[i].id);
         T(shdptr);
         T(shdptr->slot.id == shd[i].id);
-        T(shdptr->slot.ctx_id == _sg.active_context.id);
         T(shdptr->slot.state == SG_RESOURCESTATE_VALID);
-        T(shdptr->cmn.stage[SG_SHADERSTAGE_VS].num_uniform_blocks == 1);
-        T(shdptr->cmn.stage[SG_SHADERSTAGE_VS].num_images == 0);
-        T(shdptr->cmn.stage[SG_SHADERSTAGE_VS].uniform_blocks[0].size == 16);
-        T(shdptr->cmn.stage[SG_SHADERSTAGE_FS].num_uniform_blocks == 0);
-        T(shdptr->cmn.stage[SG_SHADERSTAGE_FS].num_images == 0);
+        T(shdptr->cmn.uniform_blocks[0].stage == SG_SHADERSTAGE_VERTEX);
+        T(shdptr->cmn.uniform_blocks[0].size == 16);
     }
-    /* trying to create another one fails because buffer is exhausted */
+    /* trying to create another one fails because pool is exhausted */
     T(sg_make_shader(&desc).id == SG_INVALID_ID);
 
     for (int i = 0; i < 3; i++) {
@@ -447,7 +510,6 @@ UTEST(sokol_gfx, make_destroy_pipelines) {
         const _sg_pipeline_t* pipptr = _sg_lookup_pipeline(&_sg.pools, pip[i].id);
         T(pipptr);
         T(pipptr->slot.id == pip[i].id);
-        T(pipptr->slot.ctx_id == _sg.active_context.id);
         T(pipptr->slot.state == SG_RESOURCESTATE_VALID);
         T(pipptr->shader == _sg_lookup_shader(&_sg.pools, desc.shader.id));
         T(pipptr->cmn.shader_id.id == desc.shader.id);
@@ -456,10 +518,10 @@ UTEST(sokol_gfx, make_destroy_pipelines) {
         T(pipptr->cmn.depth.pixel_format == SG_PIXELFORMAT_DEPTH_STENCIL);
         T(pipptr->cmn.sample_count == 1);
         T(pipptr->cmn.index_type == SG_INDEXTYPE_NONE);
-        T(pipptr->cmn.vertex_layout_valid[0]);
-        T(!pipptr->cmn.vertex_layout_valid[1]);
+        T(pipptr->cmn.vertex_buffer_layout_active[0]);
+        T(!pipptr->cmn.vertex_buffer_layout_active[1]);
     }
-    /* trying to create another one fails because buffer is exhausted */
+    /* trying to create another one fails because pool is exhausted */
     T(sg_make_pipeline(&desc).id == SG_INVALID_ID);
 
     for (int i = 0; i < 3; i++) {
@@ -470,50 +532,49 @@ UTEST(sokol_gfx, make_destroy_pipelines) {
     sg_shutdown();
 }
 
-UTEST(sokol_gfx, make_destroy_passes) {
+UTEST(sokol_gfx, make_destroy_attachments) {
     setup(&(sg_desc){
-        .pass_pool_size = 3
+        .attachments_pool_size = 3
     });
     T(sg_isvalid());
 
-    sg_pass pass[3] = { {0} };
+    sg_attachments atts[3] = { {0} };
 
     sg_image_desc img_desc = {
         .render_target = true,
         .width = 128,
         .height = 128,
     };
-    sg_pass_desc pass_desc = (sg_pass_desc){
-        .color_attachments = {
+    sg_attachments_desc atts_desc = (sg_attachments_desc){
+        .colors = {
             [0].image = sg_make_image(&img_desc),
             [1].image = sg_make_image(&img_desc),
             [2].image = sg_make_image(&img_desc)
         },
     };
     for (int i = 0; i < 3; i++) {
-        pass[i] = sg_make_pass(&pass_desc);
-        T(pass[i].id != SG_INVALID_ID);
-        T((2-i) == _sg.pools.pass_pool.queue_top);
-        T(sg_query_pass_state(pass[i]) == SG_RESOURCESTATE_VALID);
-        const _sg_pass_t* passptr = _sg_lookup_pass(&_sg.pools, pass[i].id);
-        T(passptr);
-        T(passptr->slot.id == pass[i].id);
-        T(passptr->slot.ctx_id == _sg.active_context.id);
-        T(passptr->slot.state == SG_RESOURCESTATE_VALID);
-        T(passptr->cmn.num_color_atts == 3);
+        atts[i] = sg_make_attachments(&atts_desc);
+        T(atts[i].id != SG_INVALID_ID);
+        T((2-i) == _sg.pools.attachments_pool.queue_top);
+        T(sg_query_attachments_state(atts[i]) == SG_RESOURCESTATE_VALID);
+        const _sg_attachments_t* attsptr = _sg_lookup_attachments(&_sg.pools, atts[i].id);
+        T(attsptr);
+        T(attsptr->slot.id == atts[i].id);
+        T(attsptr->slot.state == SG_RESOURCESTATE_VALID);
+        T(attsptr->cmn.num_colors == 3);
         for (int ai = 0; ai < 3; ai++) {
-            const _sg_image_t* img = _sg_pass_color_image(passptr, ai);
-            T(img == _sg_lookup_image(&_sg.pools, pass_desc.color_attachments[ai].image.id));
-            T(passptr->cmn.color_atts[ai].image_id.id == pass_desc.color_attachments[ai].image.id);
+            const _sg_image_t* img = _sg_attachments_color_image(attsptr, ai);
+            T(img == _sg_lookup_image(&_sg.pools, atts_desc.colors[ai].image.id));
+            T(attsptr->cmn.colors[ai].image_id.id == atts_desc.colors[ai].image.id);
         }
     }
-    /* trying to create another one fails because buffer is exhausted */
-    T(sg_make_pass(&pass_desc).id == SG_INVALID_ID);
+    /* trying to create another one fails because pool is exhausted */
+    T(sg_make_attachments(&atts_desc).id == SG_INVALID_ID);
 
     for (int i = 0; i < 3; i++) {
-        sg_destroy_pass(pass[i]);
-        T(sg_query_pass_state(pass[i]) == SG_RESOURCESTATE_INVALID);
-        T((i+1) == _sg.pools.pass_pool.queue_top);
+        sg_destroy_attachments(atts[i]);
+        T(sg_query_attachments_state(atts[i]) == SG_RESOURCESTATE_INVALID);
+        T((i+1) == _sg.pools.attachments_pool.queue_top);
     }
     sg_shutdown();
 }
@@ -564,21 +625,31 @@ UTEST(sokol_gfx, query_image_defaults) {
     T(desc.usage == SG_USAGE_IMMUTABLE);
     T(desc.pixel_format == SG_PIXELFORMAT_RGBA8);
     T(desc.sample_count == 1);
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, query_sampler_defaults) {
+    setup(&(sg_desc){0});
+    const sg_sampler_desc desc = sg_query_sampler_defaults(&(sg_sampler_desc){0});
     T(desc.min_filter == SG_FILTER_NEAREST);
     T(desc.mag_filter == SG_FILTER_NEAREST);
+    T(desc.mipmap_filter == SG_FILTER_NEAREST);
     T(desc.wrap_u == SG_WRAP_REPEAT);
     T(desc.wrap_v == SG_WRAP_REPEAT);
     T(desc.wrap_w == SG_WRAP_REPEAT);
+    T(desc.min_lod == 0.0f);
+    T(desc.max_lod == FLT_MAX);
+    T(desc.border_color == SG_BORDERCOLOR_OPAQUE_BLACK);
+    T(desc.compare == SG_COMPAREFUNC_NEVER);
     T(desc.max_anisotropy == 1);
-    T(desc.max_lod >= FLT_MAX);
     sg_shutdown();
 }
 
 UTEST(sokol_gfx, query_shader_defaults) {
     setup(&(sg_desc){0});
     const sg_shader_desc desc = sg_query_shader_defaults(&(sg_shader_desc){0});
-    T(0 == strcmp(desc.vs.entry, "main"));
-    T(0 == strcmp(desc.fs.entry, "main"));
+    T(0 == strcmp(desc.vertex_func.entry, "main"));
+    T(0 == strcmp(desc.fragment_func.entry, "main"));
     sg_shutdown();
 }
 
@@ -726,12 +797,12 @@ UTEST(sokol_gfx, multiple_color_state) {
     sg_shutdown();
 }
 
-UTEST(sokol_gfx, query_pass_defaults) {
+UTEST(sokol_gfx, query_attachments_defaults) {
     setup(&(sg_desc){0});
-    /* sg_pass_desc doesn't actually have any meaningful default values */
-    const sg_pass_desc desc = sg_query_pass_defaults(&(sg_pass_desc){0});
-    T(desc.color_attachments[0].image.id == SG_INVALID_ID);
-    T(desc.color_attachments[0].mip_level == 0);
+    /* sg_attachments_desc doesn't actually have any meaningful default values */
+    const sg_attachments_desc desc = sg_query_attachments_defaults(&(sg_attachments_desc){0});
+    T(desc.colors[0].image.id == SG_INVALID_ID);
+    T(desc.colors[0].mip_level == 0);
     sg_shutdown();
 }
 
@@ -745,6 +816,7 @@ UTEST(sokol_gfx, query_buffer_info) {
     T(buf.id != SG_INVALID_ID);
     const sg_buffer_info info = sg_query_buffer_info(buf);
     T(info.slot.state == SG_RESOURCESTATE_VALID);
+    T(info.slot.res_id == buf.id);
     sg_shutdown();
 }
 
@@ -758,7 +830,18 @@ UTEST(sokol_gfx, query_image_info) {
     T(img.id != SG_INVALID_ID);
     const sg_image_info info = sg_query_image_info(img);
     T(info.slot.state == SG_RESOURCESTATE_VALID);
+    T(info.slot.res_id == img.id);
     T(info.num_slots == 1);
+    sg_shutdown();
+}
+
+UTEST(sokoL_gfx, query_sampler_info) {
+    setup(&(sg_desc){0});
+    sg_sampler smp = sg_make_sampler(&(sg_sampler_desc){ 0 });
+    T(smp.id != SG_INVALID_ID);
+    const sg_sampler_info info = sg_query_sampler_info(smp);
+    T(info.slot.state == SG_RESOURCESTATE_VALID);
+    T(info.slot.res_id == smp.id);
     sg_shutdown();
 }
 
@@ -766,13 +849,14 @@ UTEST(sokol_gfx, query_shader_info) {
     setup(&(sg_desc){0});
     sg_shader shd = sg_make_shader(&(sg_shader_desc){
         .attrs = {
-            [0] = { .name = "pos" }
+            [0] = { .glsl_name = "pos" }
         },
-        .vs.source = "bla",
-        .fs.source = "blub"
+        .vertex_func.source = "bla",
+        .fragment_func.source = "blub"
     });
     const sg_shader_info info = sg_query_shader_info(shd);
     T(info.slot.state == SG_RESOURCESTATE_VALID);
+    T(info.slot.res_id == shd.id);
     sg_shutdown();
 }
 
@@ -784,33 +868,35 @@ UTEST(sokol_gfx, query_pipeline_info) {
         },
         .shader = sg_make_shader(&(sg_shader_desc){
             .attrs = {
-                [0] = { .name = "pos" }
+                [0] = { .glsl_name = "pos" }
             },
-            .vs.source = "bla",
-            .fs.source = "blub"
+            .vertex_func.source = "bla",
+            .fragment_func.source = "blub"
         })
     });
     const sg_pipeline_info info = sg_query_pipeline_info(pip);
     T(info.slot.state == SG_RESOURCESTATE_VALID);
+    T(info.slot.res_id == pip.id);
     sg_shutdown();
 }
 
-UTEST(sokol_gfx, query_pass_info) {
+UTEST(sokol_gfx, query_attachments_info) {
     setup(&(sg_desc){0});
     sg_image_desc img_desc = {
         .render_target = true,
         .width = 128,
         .height = 128,
     };
-    sg_pass pass = sg_make_pass(&(sg_pass_desc){
-        .color_attachments = {
+    sg_attachments atts = sg_make_attachments(&(sg_attachments_desc){
+        .colors = {
             [0].image = sg_make_image(&img_desc),
             [1].image = sg_make_image(&img_desc),
             [2].image = sg_make_image(&img_desc)
         },
     });
-    const sg_pass_info info = sg_query_pass_info(pass);
+    const sg_attachments_info info = sg_query_attachments_info(atts);
     T(info.slot.state == SG_RESOURCESTATE_VALID);
+    T(info.slot.res_id == atts.id);
     sg_shutdown();
 }
 
@@ -832,6 +918,9 @@ UTEST(sokol_gfx, query_buffer_desc) {
     T(b0_desc.mtl_buffers[0] == 0);
     T(b0_desc.d3d11_buffer == 0);
     T(b0_desc.wgpu_buffer == 0);
+    T(sg_query_buffer_size(b0) == 32);
+    T(sg_query_buffer_type(b0) == SG_BUFFERTYPE_VERTEXBUFFER);
+    T(sg_query_buffer_usage(b0) == SG_USAGE_STREAM);
 
     float vtx_data[16];
     sg_buffer b1 = sg_make_buffer(&(sg_buffer_desc){
@@ -843,6 +932,9 @@ UTEST(sokol_gfx, query_buffer_desc) {
     T(b1_desc.usage == SG_USAGE_IMMUTABLE);
     T(b1_desc.data.ptr == 0);
     T(b1_desc.data.size == 0);
+    T(sg_query_buffer_size(b1) == sizeof(vtx_data));
+    T(sg_query_buffer_type(b1) == SG_BUFFERTYPE_VERTEXBUFFER);
+    T(sg_query_buffer_usage(b1) == SG_USAGE_IMMUTABLE);
 
     uint16_t idx_data[8];
     sg_buffer b2 = sg_make_buffer(&(sg_buffer_desc){
@@ -855,6 +947,9 @@ UTEST(sokol_gfx, query_buffer_desc) {
     T(b2_desc.usage == SG_USAGE_IMMUTABLE);
     T(b2_desc.data.ptr == 0);
     T(b2_desc.data.size == 0);
+    T(sg_query_buffer_size(b2) == sizeof(idx_data));
+    T(sg_query_buffer_type(b2) == SG_BUFFERTYPE_INDEXBUFFER);
+    T(sg_query_buffer_usage(b2) == SG_USAGE_IMMUTABLE);
 
     // invalid buffer (returns zeroed desc)
     sg_buffer b3 = sg_make_buffer(&(sg_buffer_desc){
@@ -867,6 +962,9 @@ UTEST(sokol_gfx, query_buffer_desc) {
     T(b3_desc.size == 0);
     T(b3_desc.type == 0);
     T(b3_desc.usage == 0);
+    T(sg_query_buffer_size(b3) == 0);
+    T(sg_query_buffer_type(b3) == _SG_BUFFERTYPE_DEFAULT);
+    T(sg_query_buffer_usage(b3) == _SG_USAGE_DEFAULT);
 
     sg_shutdown();
 }
@@ -878,13 +976,7 @@ UTEST(sokol_gfx, query_image_desc) {
         .width = 256,
         .height = 512,
         .pixel_format = SG_PIXELFORMAT_R8,
-        .mag_filter = SG_FILTER_LINEAR,
-        .wrap_v = SG_WRAP_CLAMP_TO_EDGE,
         .usage = SG_USAGE_DYNAMIC,
-        .border_color = SG_BORDERCOLOR_OPAQUE_WHITE,
-        .max_anisotropy = 4,
-        .min_lod = 0.5f,
-        .max_lod = 0.75f,
     });
     const sg_image_desc i0_desc = sg_query_image_desc(i0);
     T(i0_desc.type == SG_IMAGETYPE_2D);
@@ -896,15 +988,6 @@ UTEST(sokol_gfx, query_image_desc) {
     T(i0_desc.usage == SG_USAGE_DYNAMIC);
     T(i0_desc.pixel_format == SG_PIXELFORMAT_R8);
     T(i0_desc.sample_count == 1);
-    T(i0_desc.min_filter == SG_FILTER_NEAREST);
-    T(i0_desc.mag_filter == SG_FILTER_LINEAR);
-    T(i0_desc.wrap_u == SG_WRAP_REPEAT);
-    T(i0_desc.wrap_v == SG_WRAP_CLAMP_TO_EDGE);
-    T(i0_desc.wrap_w == SG_WRAP_REPEAT);
-    T(i0_desc.border_color == SG_BORDERCOLOR_OPAQUE_WHITE);
-    T(i0_desc.max_anisotropy == 4);
-    T(i0_desc.min_lod == 0.5f);
-    T(i0_desc.max_lod == 0.75f);
     T(i0_desc.data.subimage[0][0].ptr == 0);
     T(i0_desc.data.subimage[0][0].size == 0);
     T(i0_desc.gl_textures[0] == 0);
@@ -913,18 +996,64 @@ UTEST(sokol_gfx, query_image_desc) {
     T(i0_desc.d3d11_texture == 0);
     T(i0_desc.d3d11_shader_resource_view == 0);
     T(i0_desc.wgpu_texture == 0);
+    T(sg_query_image_type(i0) == SG_IMAGETYPE_2D);
+    T(sg_query_image_width(i0) == 256);
+    T(sg_query_image_height(i0) == 512);
+    T(sg_query_image_num_slices(i0) == 1);
+    T(sg_query_image_num_mipmaps(i0) == 1);
+    T(sg_query_image_pixelformat(i0) == SG_PIXELFORMAT_R8);
+    T(sg_query_image_sample_count(i0) == 1);
 
     sg_destroy_image(i0);
-    const sg_image_desc i1_desc = sg_query_image_desc(i0);
-    T(i1_desc.type == 0);
-    T(i1_desc.render_target == false);
-    T(i1_desc.width == 0);
-    T(i1_desc.height == 0);
-    T(i1_desc.num_slices == 0);
-    T(i1_desc.num_mipmaps == 0);
-    T(i1_desc.usage == 0);
-    T(i1_desc.pixel_format == 0);
-    T(i1_desc.sample_count == 0);
+    const sg_image_desc i0_desc_x = sg_query_image_desc(i0);
+    T(i0_desc_x.type == 0);
+    T(i0_desc_x.render_target == false);
+    T(i0_desc_x.width == 0);
+    T(i0_desc_x.height == 0);
+    T(i0_desc_x.num_slices == 0);
+    T(i0_desc_x.num_mipmaps == 0);
+    T(i0_desc_x.usage == 0);
+    T(i0_desc_x.pixel_format == 0);
+    T(i0_desc_x.sample_count == 0);
+    T(sg_query_image_type(i0) == _SG_IMAGETYPE_DEFAULT);
+    T(sg_query_image_width(i0) == 0);
+    T(sg_query_image_height(i0) == 0);
+    T(sg_query_image_num_slices(i0) == 0);
+    T(sg_query_image_num_mipmaps(i0) == 0);
+    T(sg_query_image_pixelformat(i0) == _SG_PIXELFORMAT_DEFAULT);
+    T(sg_query_image_sample_count(i0) == 0);
+
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, query_sampler_desc) {
+    setup(&(sg_desc){0});
+    sg_sampler s0 = sg_make_sampler(&(sg_sampler_desc){
+        .min_filter = SG_FILTER_LINEAR,
+        .mag_filter = SG_FILTER_LINEAR,
+        .mipmap_filter = SG_FILTER_LINEAR,
+        .wrap_v = SG_WRAP_MIRRORED_REPEAT,
+        .max_anisotropy = 8,
+        .border_color = SG_BORDERCOLOR_TRANSPARENT_BLACK,
+        .compare = SG_COMPAREFUNC_GREATER,
+    });
+    const sg_sampler_desc s0_desc = sg_query_sampler_desc(s0);
+    T(s0_desc.min_filter == SG_FILTER_LINEAR);
+    T(s0_desc.mag_filter == SG_FILTER_LINEAR);
+    T(s0_desc.mipmap_filter == SG_FILTER_LINEAR);
+    T(s0_desc.wrap_u == SG_WRAP_REPEAT);
+    T(s0_desc.wrap_v == SG_WRAP_MIRRORED_REPEAT);
+    T(s0_desc.wrap_w == SG_WRAP_REPEAT);
+    T(s0_desc.min_lod == 0.0f);
+    T(s0_desc.max_lod == FLT_MAX);
+    T(s0_desc.border_color == SG_BORDERCOLOR_TRANSPARENT_BLACK);
+    T(s0_desc.compare == SG_COMPAREFUNC_GREATER);
+    T(s0_desc.max_anisotropy == 8);
+
+    sg_destroy_sampler(s0);
+    const sg_sampler_desc s0_desc_x = sg_query_sampler_desc(s0);
+    T(s0_desc_x.min_filter == 0);
+    T(s0_desc_x.compare == 0);
 
     sg_shutdown();
 }
@@ -934,54 +1063,86 @@ UTEST(sokol_gfx, query_shader_desc) {
 
     sg_shader s0 = sg_make_shader(&(sg_shader_desc){
         .attrs = {
-            [0] = { .name = "pos", .sem_name = "POS", .sem_index = 1 },
+            [0] = { .glsl_name = "pos", .hlsl_sem_name = "POS", .hlsl_sem_index = 1 },
         },
-        .vs = {
-            .source = "vs_source",
-            .uniform_blocks = {
-                [0] = {
-                    .size = 128,
-                    .layout = SG_UNIFORMLAYOUT_STD140,
-                    .uniforms = {
-                        [0] = { .name = "blub", .type = SG_UNIFORMTYPE_FLOAT4, .array_count = 1 },
-                        [1] = { .name = "blob", .type = SG_UNIFORMTYPE_FLOAT2, .array_count = 1 },
-                    }
+        .vertex_func.source = "vs_source",
+        .fragment_func.source = "fs_source",
+        .uniform_blocks = {
+            [0] = {
+                .stage = SG_SHADERSTAGE_VERTEX,
+                .size = 128,
+                .layout = SG_UNIFORMLAYOUT_STD140,
+                .glsl_uniforms = {
+                    [0] = { .glsl_name = "blub", .type = SG_UNIFORMTYPE_FLOAT4, .array_count = 1 },
+                    [1] = { .glsl_name = "blob", .type = SG_UNIFORMTYPE_FLOAT2, .array_count = 1 },
                 }
-            },
-            .images = {
-                [0] = { .name = "img0", .image_type = SG_IMAGETYPE_2D, .sampler_type = SG_SAMPLERTYPE_FLOAT },
             }
         },
-        .fs = {
-            .source = "fs_source",
-            .images = {
-                [0] = { .name = "img1", .image_type = SG_IMAGETYPE_ARRAY, .sampler_type = SG_SAMPLERTYPE_UINT },
-            }
-        },
+        .images[0] = { .stage = SG_SHADERSTAGE_VERTEX, .image_type = SG_IMAGETYPE_2D, .sample_type = SG_IMAGESAMPLETYPE_FLOAT, .multisampled = true },
+        .images[1] = { .stage = SG_SHADERSTAGE_VERTEX, .image_type = SG_IMAGETYPE_3D, .sample_type = SG_IMAGESAMPLETYPE_DEPTH },
+        .images[2] = { .stage = SG_SHADERSTAGE_FRAGMENT, .image_type = SG_IMAGETYPE_ARRAY, .sample_type = SG_IMAGESAMPLETYPE_DEPTH },
+        .images[3] = { .stage = SG_SHADERSTAGE_FRAGMENT, .image_type = SG_IMAGETYPE_CUBE, .sample_type = SG_IMAGESAMPLETYPE_UNFILTERABLE_FLOAT },
+        .samplers[0] = { .stage = SG_SHADERSTAGE_VERTEX, .sampler_type = SG_SAMPLERTYPE_FILTERING },
+        .samplers[1] = { .stage = SG_SHADERSTAGE_VERTEX, .sampler_type = SG_SAMPLERTYPE_COMPARISON },
+        .samplers[2] = { .stage = SG_SHADERSTAGE_FRAGMENT, .sampler_type = SG_SAMPLERTYPE_COMPARISON },
+        .samplers[3] = { .stage = SG_SHADERSTAGE_FRAGMENT, .sampler_type = SG_SAMPLERTYPE_NONFILTERING },
+        .image_sampler_pairs[0] = { .stage = SG_SHADERSTAGE_VERTEX, .image_slot = 0, .sampler_slot = 0, .glsl_name = "img0" },
+        .image_sampler_pairs[1] = { .stage = SG_SHADERSTAGE_VERTEX, .image_slot = 1, .sampler_slot = 1, .glsl_name = "img1" },
+        .image_sampler_pairs[2] = { .stage = SG_SHADERSTAGE_FRAGMENT, .image_slot = 2, .sampler_slot = 2, .glsl_name = "img3" },
+        .image_sampler_pairs[3] = { .stage = SG_SHADERSTAGE_FRAGMENT, .image_slot = 3, .sampler_slot = 3, .glsl_name = "img4" },
         .label = "label",
     });
     const sg_shader_desc s0_desc = sg_query_shader_desc(s0);
-    T(s0_desc.attrs[0].name == 0);
-    T(s0_desc.attrs[0].sem_name == 0);
-    T(s0_desc.attrs[0].sem_index == 0);
-    T(s0_desc.vs.source == 0);
-    T(s0_desc.vs.uniform_blocks[0].size == 128);
-    T(s0_desc.vs.uniform_blocks[0].layout == 0);
-    T(s0_desc.vs.uniform_blocks[0].uniforms[0].name == 0);
-    T(s0_desc.vs.uniform_blocks[0].uniforms[0].type == 0);
-    T(s0_desc.vs.uniform_blocks[0].uniforms[0].array_count == 0);
-    T(s0_desc.vs.images[0].name == 0);
-    T(s0_desc.vs.images[0].image_type == SG_IMAGETYPE_2D);
-    T(s0_desc.vs.images[0].sampler_type == SG_SAMPLERTYPE_FLOAT);
-    T(s0_desc.fs.source == 0);
-    T(s0_desc.fs.uniform_blocks[0].size == 0);
-    T(s0_desc.fs.uniform_blocks[0].layout == 0);
-    T(s0_desc.fs.uniform_blocks[0].uniforms[0].name == 0);
-    T(s0_desc.fs.uniform_blocks[0].uniforms[0].type == 0);
-    T(s0_desc.fs.uniform_blocks[0].uniforms[0].array_count == 0);
-    T(s0_desc.fs.images[0].name == 0);
-    T(s0_desc.fs.images[0].image_type == SG_IMAGETYPE_ARRAY);
-    T(s0_desc.fs.images[0].sampler_type == SG_SAMPLERTYPE_UINT);
+    T(s0_desc.attrs[0].glsl_name == 0);
+    T(s0_desc.attrs[0].hlsl_sem_name == 0);
+    T(s0_desc.attrs[0].hlsl_sem_index == 0);
+    T(s0_desc.vertex_func.source == 0);
+    T(s0_desc.fragment_func.source == 0);
+    T(s0_desc.uniform_blocks[0].size == 128);
+    T(s0_desc.uniform_blocks[0].layout == 0);
+    T(s0_desc.uniform_blocks[0].glsl_uniforms[0].glsl_name == 0);
+    T(s0_desc.uniform_blocks[0].glsl_uniforms[0].type == 0);
+    T(s0_desc.uniform_blocks[0].glsl_uniforms[0].array_count == 0);
+    T(s0_desc.images[0].stage == SG_SHADERSTAGE_VERTEX);
+    T(s0_desc.images[0].image_type == SG_IMAGETYPE_2D);
+    T(s0_desc.images[0].sample_type == SG_IMAGESAMPLETYPE_FLOAT);
+    T(s0_desc.images[0].multisampled);
+    T(s0_desc.images[1].stage == SG_SHADERSTAGE_VERTEX);
+    T(s0_desc.images[1].image_type == SG_IMAGETYPE_3D);
+    T(s0_desc.images[1].sample_type == SG_IMAGESAMPLETYPE_DEPTH);
+    T(s0_desc.images[1].multisampled == false);
+    T(s0_desc.images[2].stage == SG_SHADERSTAGE_FRAGMENT);
+    T(s0_desc.images[2].image_type == SG_IMAGETYPE_ARRAY);
+    T(s0_desc.images[2].sample_type == SG_IMAGESAMPLETYPE_DEPTH);
+    T(s0_desc.images[2].multisampled == false);
+    T(s0_desc.images[3].stage == SG_SHADERSTAGE_FRAGMENT);
+    T(s0_desc.images[3].image_type == SG_IMAGETYPE_CUBE);
+    T(s0_desc.images[3].sample_type == SG_IMAGESAMPLETYPE_UNFILTERABLE_FLOAT);
+    T(s0_desc.images[3].multisampled == false);
+    T(s0_desc.samplers[0].stage == SG_SHADERSTAGE_VERTEX);
+    T(s0_desc.samplers[0].sampler_type == SG_SAMPLERTYPE_FILTERING);
+    T(s0_desc.samplers[1].stage == SG_SHADERSTAGE_VERTEX);
+    T(s0_desc.samplers[1].sampler_type == SG_SAMPLERTYPE_COMPARISON);
+    T(s0_desc.samplers[2].stage == SG_SHADERSTAGE_FRAGMENT);
+    T(s0_desc.samplers[2].sampler_type == SG_SAMPLERTYPE_COMPARISON);
+    T(s0_desc.samplers[3].stage == SG_SHADERSTAGE_FRAGMENT);
+    T(s0_desc.samplers[3].sampler_type == SG_SAMPLERTYPE_NONFILTERING);
+    T(s0_desc.image_sampler_pairs[0].stage == SG_SHADERSTAGE_VERTEX);
+    T(s0_desc.image_sampler_pairs[0].image_slot == 0);
+    T(s0_desc.image_sampler_pairs[0].sampler_slot == 0);
+    T(s0_desc.image_sampler_pairs[0].glsl_name == 0);
+    T(s0_desc.image_sampler_pairs[1].stage == SG_SHADERSTAGE_VERTEX);
+    T(s0_desc.image_sampler_pairs[1].image_slot == 1);
+    T(s0_desc.image_sampler_pairs[1].sampler_slot == 1);
+    T(s0_desc.image_sampler_pairs[1].glsl_name == 0);
+    T(s0_desc.image_sampler_pairs[2].stage == SG_SHADERSTAGE_FRAGMENT);
+    T(s0_desc.image_sampler_pairs[2].image_slot == 2);
+    T(s0_desc.image_sampler_pairs[2].sampler_slot == 2);
+    T(s0_desc.image_sampler_pairs[2].glsl_name == 0);
+    T(s0_desc.image_sampler_pairs[3].stage == SG_SHADERSTAGE_FRAGMENT);
+    T(s0_desc.image_sampler_pairs[3].image_slot == 3);
+    T(s0_desc.image_sampler_pairs[3].sampler_slot == 3);
+    T(s0_desc.image_sampler_pairs[3].glsl_name == 0);
 
     sg_shutdown();
 }
@@ -1060,7 +1221,7 @@ UTEST(sokol_gfx, query_pipeline_desc) {
     sg_shutdown();
 }
 
-UTEST(sokol_gfx, query_pass_desc) {
+UTEST(sokol_gfx, query_attachments_desc) {
     setup(&(sg_desc){0});
 
     const sg_image_desc color_img_desc = {
@@ -1079,27 +1240,27 @@ UTEST(sokol_gfx, query_pass_desc) {
     sg_image color_img_2 = sg_make_image(&color_img_desc);
     sg_image depth_img = sg_make_image(&depth_img_desc);
 
-    sg_pass p0 = sg_make_pass(&(sg_pass_desc){
-        .color_attachments = {
+    sg_attachments a0 = sg_make_attachments(&(sg_attachments_desc){
+        .colors = {
             [0].image = color_img_0,
             [1].image = color_img_1,
             [2].image = color_img_2,
         },
-        .depth_stencil_attachment.image = depth_img,
+        .depth_stencil.image = depth_img,
     });
-    const sg_pass_desc p0_desc = sg_query_pass_desc(p0);
-    T(p0_desc.color_attachments[0].image.id == color_img_0.id);
-    T(p0_desc.color_attachments[0].mip_level == 0);
-    T(p0_desc.color_attachments[0].slice == 0);
-    T(p0_desc.color_attachments[1].image.id == color_img_1.id);
-    T(p0_desc.color_attachments[1].mip_level == 0);
-    T(p0_desc.color_attachments[1].slice == 0);
-    T(p0_desc.color_attachments[2].image.id == color_img_2.id);
-    T(p0_desc.color_attachments[2].mip_level == 0);
-    T(p0_desc.color_attachments[2].slice == 0);
-    T(p0_desc.depth_stencil_attachment.image.id == depth_img.id);
-    T(p0_desc.depth_stencil_attachment.mip_level == 0);
-    T(p0_desc.depth_stencil_attachment.slice == 0);
+    const sg_attachments_desc a0_desc = sg_query_attachments_desc(a0);
+    T(a0_desc.colors[0].image.id == color_img_0.id);
+    T(a0_desc.colors[0].mip_level == 0);
+    T(a0_desc.colors[0].slice == 0);
+    T(a0_desc.colors[1].image.id == color_img_1.id);
+    T(a0_desc.colors[1].mip_level == 0);
+    T(a0_desc.colors[1].slice == 0);
+    T(a0_desc.colors[2].image.id == color_img_2.id);
+    T(a0_desc.colors[2].mip_level == 0);
+    T(a0_desc.colors[2].slice == 0);
+    T(a0_desc.depth_stencil.image.id == depth_img.id);
+    T(a0_desc.depth_stencil.mip_level == 0);
+    T(a0_desc.depth_stencil.slice == 0);
 
     sg_shutdown();
 }
@@ -1127,6 +1288,19 @@ UTEST(sokol_gfx, image_resource_states) {
     T(sg_query_image_state(img) == SG_RESOURCESTATE_ALLOC);
     sg_dealloc_image(img);
     T(sg_query_image_state(img) == SG_RESOURCESTATE_INVALID);
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, sampler_resource_states) {
+    setup(&(sg_desc){0});
+    sg_sampler smp = sg_alloc_sampler();
+    T(sg_query_sampler_state(smp) == SG_RESOURCESTATE_ALLOC);
+    sg_init_sampler(smp, &(sg_sampler_desc){ .min_filter = SG_FILTER_LINEAR, .mag_filter = SG_FILTER_LINEAR });
+    T(sg_query_sampler_state(smp) == SG_RESOURCESTATE_VALID);
+    sg_uninit_sampler(smp);
+    T(sg_query_sampler_state(smp) == SG_RESOURCESTATE_ALLOC);
+    sg_dealloc_sampler(smp);
+    T(sg_query_sampler_state(smp) == SG_RESOURCESTATE_INVALID);
     sg_shutdown();
 }
 
@@ -1159,18 +1333,18 @@ UTEST(sokol_gfx, pipeline_resource_states) {
     sg_shutdown();
 }
 
-UTEST(sokol_gfx, pass_resource_states) {
+UTEST(sokol_gfx, attachments_resource_states) {
     setup(&(sg_desc){0});
-    sg_pass pass = sg_alloc_pass();
-    T(sg_query_pass_state(pass) == SG_RESOURCESTATE_ALLOC);
-    sg_init_pass(pass, &(sg_pass_desc){
-        .color_attachments[0].image = sg_make_image(&(sg_image_desc){ .render_target=true, .width=16, .height=16})
+    sg_attachments atts = sg_alloc_attachments();
+    T(sg_query_attachments_state(atts) == SG_RESOURCESTATE_ALLOC);
+    sg_init_attachments(atts, &(sg_attachments_desc){
+        .colors[0].image = sg_make_image(&(sg_image_desc){ .render_target=true, .width=16, .height=16})
     });
-    T(sg_query_pass_state(pass) == SG_RESOURCESTATE_VALID);
-    sg_uninit_pass(pass);
-    T(sg_query_pass_state(pass) == SG_RESOURCESTATE_ALLOC);
-    sg_dealloc_pass(pass);
-    T(sg_query_pass_state(pass) == SG_RESOURCESTATE_INVALID);
+    T(sg_query_attachments_state(atts) == SG_RESOURCESTATE_VALID);
+    sg_uninit_attachments(atts);
+    T(sg_query_attachments_state(atts) == SG_RESOURCESTATE_ALLOC);
+    sg_dealloc_attachments(atts);
+    T(sg_query_attachments_state(atts) == SG_RESOURCESTATE_INVALID);
     sg_shutdown();
 }
 
@@ -1274,7 +1448,7 @@ UTEST(sokol_gfx, commit_listener_add_remove_add) {
     sg_shutdown();
 }
 
-UTEST(sokol_gfx, commit_listener_remove_non_existant) {
+UTEST(sokol_gfx, commit_listener_remove_non_existent) {
     reset_commit_listener();
     setup(&(sg_desc){0});
     const sg_commit_listener l0 = {
@@ -1399,6 +1573,17 @@ UTEST(sokol_gfx, image_double_destroy_is_ok) {
     sg_shutdown();
 }
 
+UTEST(sokol_gfx, sampler_double_destroy_is_ok) {
+    setup(&(sg_desc){0});
+    sg_sampler smp = sg_make_sampler(&(sg_sampler_desc){0});
+    T(sg_query_sampler_state(smp) == SG_RESOURCESTATE_VALID);
+    sg_destroy_sampler(smp);
+    T(sg_query_sampler_state(smp) == SG_RESOURCESTATE_INVALID);
+    sg_destroy_sampler(smp);
+    T(sg_query_sampler_state(smp) == SG_RESOURCESTATE_INVALID);
+    sg_shutdown();
+}
+
 UTEST(sokol_gfx, shader_double_destroy_is_ok) {
     setup(&(sg_desc){0});
     sg_shader shd = create_shader();
@@ -1421,14 +1606,14 @@ UTEST(sokol_gfx, pipeline_double_destroy_is_ok) {
     sg_shutdown();
 }
 
-UTEST(sokoL_gfx, pass_double_destroy_is_ok) {
+UTEST(sokoL_gfx, attachments_double_destroy_is_ok) {
     setup(&(sg_desc){0});
-    sg_pass pass = create_pass();
-    T(sg_query_pass_state(pass) == SG_RESOURCESTATE_VALID);
-    sg_destroy_pass(pass);
-    T(sg_query_pass_state(pass) == SG_RESOURCESTATE_INVALID);
-    sg_destroy_pass(pass);
-    T(sg_query_pass_state(pass) == SG_RESOURCESTATE_INVALID);
+    sg_attachments atts = create_attachments();
+    T(sg_query_attachments_state(atts) == SG_RESOURCESTATE_VALID);
+    sg_destroy_attachments(atts);
+    T(sg_query_attachments_state(atts) == SG_RESOURCESTATE_INVALID);
+    sg_destroy_attachments(atts);
+    T(sg_query_attachments_state(atts) == SG_RESOURCESTATE_INVALID);
     sg_shutdown();
 }
 
@@ -1437,7 +1622,7 @@ UTEST(sokol_gfx, make_dealloc_buffer_warns) {
     sg_buffer buf = create_buffer();
     T(sg_query_buffer_state(buf) == SG_RESOURCESTATE_VALID);
     sg_dealloc_buffer(buf);
-    T(log_item == SG_LOGITEM_DEALLOC_BUFFER_INVALID_STATE);
+    T(log_items[0] == SG_LOGITEM_DEALLOC_BUFFER_INVALID_STATE);
     T(num_log_called == 1);
     T(sg_query_buffer_state(buf) == SG_RESOURCESTATE_VALID);
     sg_destroy_buffer(buf);
@@ -1450,11 +1635,24 @@ UTEST(sokol_gfx, make_dealloc_image_warns) {
     sg_image img = create_image();
     T(sg_query_image_state(img) == SG_RESOURCESTATE_VALID);
     sg_dealloc_image(img);
-    T(log_item == SG_LOGITEM_DEALLOC_IMAGE_INVALID_STATE);
+    T(log_items[0] == SG_LOGITEM_DEALLOC_IMAGE_INVALID_STATE);
     T(num_log_called == 1);
     T(sg_query_image_state(img) == SG_RESOURCESTATE_VALID);
     sg_destroy_image(img);
     T(sg_query_image_state(img) == SG_RESOURCESTATE_INVALID);
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, make_dealloc_sampler_warns) {
+    setup(&(sg_desc){0});
+    sg_sampler smp = sg_make_sampler(&(sg_sampler_desc){0});
+    T(sg_query_sampler_state(smp) == SG_RESOURCESTATE_VALID);
+    sg_dealloc_sampler(smp);
+    T(log_items[0] == SG_LOGITEM_DEALLOC_SAMPLER_INVALID_STATE);
+    T(num_log_called == 1);
+    T(sg_query_sampler_state(smp) == SG_RESOURCESTATE_VALID);
+    sg_destroy_sampler(smp);
+    T(sg_query_sampler_state(smp) == SG_RESOURCESTATE_INVALID);
     sg_shutdown();
 }
 
@@ -1463,7 +1661,7 @@ UTEST(sokol_gfx, make_dealloc_shader_warns) {
     sg_shader shd = create_shader();
     T(sg_query_shader_state(shd) == SG_RESOURCESTATE_VALID);
     sg_dealloc_shader(shd);
-    T(log_item == SG_LOGITEM_DEALLOC_SHADER_INVALID_STATE);
+    T(log_items[0] == SG_LOGITEM_DEALLOC_SHADER_INVALID_STATE);
     T(num_log_called == 1);
     T(sg_query_shader_state(shd) == SG_RESOURCESTATE_VALID);
     sg_destroy_shader(shd);
@@ -1476,7 +1674,7 @@ UTEST(sokol_gfx, make_dealloc_pipeline_warns) {
     sg_pipeline pip = create_pipeline();
     T(sg_query_pipeline_state(pip) == SG_RESOURCESTATE_VALID);
     sg_dealloc_pipeline(pip);
-    T(log_item == SG_LOGITEM_DEALLOC_PIPELINE_INVALID_STATE);
+    T(log_items[0] == SG_LOGITEM_DEALLOC_PIPELINE_INVALID_STATE);
     T(num_log_called == 1);
     T(sg_query_pipeline_state(pip) == SG_RESOURCESTATE_VALID);
     sg_destroy_pipeline(pip);
@@ -1484,16 +1682,16 @@ UTEST(sokol_gfx, make_dealloc_pipeline_warns) {
     sg_shutdown();
 }
 
-UTEST(sokol_gfx, make_dealloc_pass_warns) {
+UTEST(sokol_gfx, make_dealloc_attachments_warns) {
     setup(&(sg_desc){0});
-    sg_pass pass = create_pass();
-    T(sg_query_pass_state(pass) == SG_RESOURCESTATE_VALID);
-    sg_dealloc_pass(pass);
-    T(log_item == SG_LOGITEM_DEALLOC_PASS_INVALID_STATE);
+    sg_attachments atts = create_attachments();
+    T(sg_query_attachments_state(atts) == SG_RESOURCESTATE_VALID);
+    sg_dealloc_attachments(atts);
+    T(log_items[0] == SG_LOGITEM_DEALLOC_ATTACHMENTS_INVALID_STATE);
     T(num_log_called == 1);
-    T(sg_query_pass_state(pass) == SG_RESOURCESTATE_VALID);
-    sg_destroy_pass(pass);
-    T(sg_query_pass_state(pass) == SG_RESOURCESTATE_INVALID);
+    T(sg_query_attachments_state(atts) == SG_RESOURCESTATE_VALID);
+    sg_destroy_attachments(atts);
+    T(sg_query_attachments_state(atts) == SG_RESOURCESTATE_INVALID);
     sg_shutdown();
 }
 
@@ -1502,7 +1700,7 @@ UTEST(sokol_gfx, alloc_uninit_buffer_warns) {
     sg_buffer buf = sg_alloc_buffer();
     T(sg_query_buffer_state(buf) == SG_RESOURCESTATE_ALLOC);
     sg_uninit_buffer(buf);
-    T(log_item == SG_LOGITEM_UNINIT_BUFFER_INVALID_STATE);
+    T(log_items[0] == SG_LOGITEM_UNINIT_BUFFER_INVALID_STATE);
     T(num_log_called == 1);
     T(sg_query_buffer_state(buf) == SG_RESOURCESTATE_ALLOC);
     sg_shutdown();
@@ -1513,9 +1711,20 @@ UTEST(sokol_gfx, alloc_uninit_image_warns) {
     sg_image img = sg_alloc_image();
     T(sg_query_image_state(img) == SG_RESOURCESTATE_ALLOC);
     sg_uninit_image(img);
-    T(log_item == SG_LOGITEM_UNINIT_IMAGE_INVALID_STATE);
+    T(log_items[0] == SG_LOGITEM_UNINIT_IMAGE_INVALID_STATE);
     T(num_log_called == 1);
     T(sg_query_image_state(img) == SG_RESOURCESTATE_ALLOC);
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, alloc_uninit_sampler_warns) {
+    setup(&(sg_desc){0});
+    sg_sampler smp = sg_alloc_sampler();
+    T(sg_query_sampler_state(smp) == SG_RESOURCESTATE_ALLOC);
+    sg_uninit_sampler(smp);
+    T(log_items[0] == SG_LOGITEM_UNINIT_SAMPLER_INVALID_STATE);
+    T(num_log_called == 1);
+    T(sg_query_sampler_state(smp) == SG_RESOURCESTATE_ALLOC);
     sg_shutdown();
 }
 
@@ -1524,7 +1733,7 @@ UTEST(sokol_gfx, alloc_uninit_shader_warns) {
     sg_shader shd = sg_alloc_shader();
     T(sg_query_shader_state(shd) == SG_RESOURCESTATE_ALLOC);
     sg_uninit_shader(shd);
-    T(log_item == SG_LOGITEM_UNINIT_SHADER_INVALID_STATE);
+    T(log_items[0] == SG_LOGITEM_UNINIT_SHADER_INVALID_STATE);
     T(num_log_called == 1);
     T(sg_query_shader_state(shd) == SG_RESOURCESTATE_ALLOC);
     sg_shutdown();
@@ -1535,20 +1744,20 @@ UTEST(sokol_gfx, alloc_uninit_pipeline_warns) {
     sg_pipeline pip = sg_alloc_pipeline();
     T(sg_query_pipeline_state(pip) == SG_RESOURCESTATE_ALLOC);
     sg_uninit_pipeline(pip);
-    T(log_item == SG_LOGITEM_UNINIT_PIPELINE_INVALID_STATE);
+    T(log_items[0] == SG_LOGITEM_UNINIT_PIPELINE_INVALID_STATE);
     T(num_log_called == 1);
     T(sg_query_pipeline_state(pip) == SG_RESOURCESTATE_ALLOC);
     sg_shutdown();
 }
 
-UTEST(sokol_gfx, alloc_uninit_pass_warns) {
+UTEST(sokol_gfx, alloc_uninit_attachments_warns) {
     setup(&(sg_desc){0});
-    sg_pass pass = sg_alloc_pass();
-    T(sg_query_pass_state(pass) == SG_RESOURCESTATE_ALLOC);
-    sg_uninit_pass(pass);
-    T(log_item == SG_LOGITEM_UNINIT_PASS_INVALID_STATE);
+    sg_attachments atts = sg_alloc_attachments();
+    T(sg_query_attachments_state(atts) == SG_RESOURCESTATE_ALLOC);
+    sg_uninit_attachments(atts);
+    T(log_items[0] == SG_LOGITEM_UNINIT_ATTACHMENTS_INVALID_STATE);
     T(num_log_called == 1);
-    T(sg_query_pass_state(pass) == SG_RESOURCESTATE_ALLOC);
+    T(sg_query_attachments_state(atts) == SG_RESOURCESTATE_ALLOC);
     sg_shutdown();
 }
 
@@ -1572,6 +1781,17 @@ UTEST(sokol_gfx, alloc_destroy_image_is_ok) {
     sg_shutdown();
 }
 
+UTEST(sokol_gfx, alloc_destroy_sampler_is_ok) {
+    setup(&(sg_desc){0});
+    sg_sampler smp = sg_alloc_sampler();
+    T(sg_query_sampler_state(smp) == SG_RESOURCESTATE_ALLOC);
+    sg_destroy_sampler(smp);
+    T(num_log_called == 0);
+    T(sg_query_sampler_state(smp) == SG_RESOURCESTATE_INVALID);
+    sg_shutdown();
+
+}
+
 UTEST(sokol_gfx, alloc_destroy_shader_is_ok) {
     setup(&(sg_desc){0});
     sg_shader shd = sg_alloc_shader();
@@ -1592,13 +1812,13 @@ UTEST(sokol_gfx, alloc_destroy_pipeline_is_ok) {
     sg_shutdown();
 }
 
-UTEST(sokol_gfx, alloc_destroy_pass_is_ok) {
+UTEST(sokol_gfx, alloc_destroy_attachments_is_ok) {
     setup(&(sg_desc){0});
-    sg_pass pass = sg_alloc_pass();
-    T(sg_query_pass_state(pass) == SG_RESOURCESTATE_ALLOC);
-    sg_destroy_pass(pass);
+    sg_attachments atts = sg_alloc_attachments();
+    T(sg_query_attachments_state(atts) == SG_RESOURCESTATE_ALLOC);
+    sg_destroy_attachments(atts);
     T(num_log_called == 0);
-    T(sg_query_pass_state(pass) == SG_RESOURCESTATE_INVALID);
+    T(sg_query_attachments_state(atts) == SG_RESOURCESTATE_INVALID);
     sg_shutdown();
 }
 
@@ -1618,16 +1838,16 @@ UTEST(sokol_gfx, make_pipeline_with_nonvalid_shader) {
     sg_shutdown();
 }
 
-UTEST(sokol_gfx, make_pass_with_nonvalid_color_images) {
+UTEST(sokol_gfx, make_attachments_with_nonvalid_color_images) {
     setup(&(sg_desc){
         .disable_validation = true,
     });
-    sg_pass pass = sg_make_pass(&(sg_pass_desc){
-        .color_attachments = {
+    sg_attachments atts = sg_make_attachments(&(sg_attachments_desc){
+        .colors = {
             [0].image = sg_alloc_image(),
             [1].image = sg_alloc_image(),
         },
-        .depth_stencil_attachment = {
+        .depth_stencil = {
             .image = sg_make_image(&(sg_image_desc){
                 .render_target = true,
                 .width = 128,
@@ -1635,8 +1855,1119 @@ UTEST(sokol_gfx, make_pass_with_nonvalid_color_images) {
             })
         }
     });
-    T(sg_query_pass_state(pass) == SG_RESOURCESTATE_FAILED);
-    sg_destroy_pass(pass);
-    T(sg_query_pass_state(pass) == SG_RESOURCESTATE_INVALID);
+    T(sg_query_attachments_state(atts) == SG_RESOURCESTATE_FAILED);
+    sg_destroy_attachments(atts);
+    T(sg_query_attachments_state(atts) == SG_RESOURCESTATE_INVALID);
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, make_attachments_without_color_attachments) {
+    setup(&(sg_desc){0});
+    sg_attachments atts = sg_make_attachments(&(sg_attachments_desc){
+        .depth_stencil.image = sg_make_image(&(sg_image_desc){
+            .render_target = true,
+            .width = 64,
+            .height = 64,
+            .pixel_format = SG_PIXELFORMAT_DEPTH,
+        })
+    });
+    T(sg_query_attachments_state(atts) == SG_RESOURCESTATE_VALID);
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, make_buffer_validate_start_canary) {
+    setup(&(sg_desc){0});
+    const uint32_t data[32] = {0};
+    sg_buffer buf = sg_make_buffer(&(sg_buffer_desc){
+        ._start_canary = 1234,
+        .data = SG_RANGE(data),
+    });
+    T(sg_query_buffer_state(buf) == SG_RESOURCESTATE_FAILED);
+    T(log_items[0] == SG_LOGITEM_VALIDATE_BUFFERDESC_CANARY);
+    T(log_items[1] == SG_LOGITEM_VALIDATION_FAILED);
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, make_buffer_validate_end_canary) {
+    setup(&(sg_desc){0});
+    const uint32_t data[32] = {0};
+    sg_buffer buf = sg_make_buffer(&(sg_buffer_desc){
+        .data = SG_RANGE(data),
+        ._end_canary = 1234,
+    });
+    T(sg_query_buffer_state(buf) == SG_RESOURCESTATE_FAILED);
+    T(log_items[0] == SG_LOGITEM_VALIDATE_BUFFERDESC_CANARY);
+    T(log_items[1] == SG_LOGITEM_VALIDATION_FAILED);
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, make_buffer_validate_immutable_nodata) {
+    setup(&(sg_desc){0});
+    sg_buffer buf = sg_make_buffer(&(sg_buffer_desc){ 0 });
+    T(sg_query_buffer_state(buf) == SG_RESOURCESTATE_FAILED);
+    T(log_items[0] == SG_LOGITEM_VALIDATE_BUFFERDESC_SIZE);
+    T(log_items[1] == SG_LOGITEM_VALIDATE_BUFFERDESC_DATA);
+    T(log_items[2] == SG_LOGITEM_VALIDATION_FAILED);
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, make_buffer_validate_size_mismatch) {
+    setup(&(sg_desc){0});
+    const uint32_t data[16] = { 0 };
+    sg_buffer buf = sg_make_buffer(&(sg_buffer_desc){
+        .size = 15 * sizeof(uint32_t),
+        .data = SG_RANGE(data),
+    });
+    T(sg_query_buffer_state(buf) == SG_RESOURCESTATE_FAILED);
+    T(log_items[0] == SG_LOGITEM_VALIDATE_BUFFERDESC_DATA_SIZE);
+    T(log_items[1] == SG_LOGITEM_VALIDATION_FAILED);
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, make_buffer_validate_data_ptr_but_no_size) {
+    setup(&(sg_desc){0});
+    const uint32_t data[16] = {0};
+    sg_buffer buf = sg_make_buffer(&(sg_buffer_desc){
+        .data.ptr = data,
+    });
+    T(sg_query_buffer_state(buf) == SG_RESOURCESTATE_FAILED);
+    T(log_items[0] == SG_LOGITEM_VALIDATE_BUFFERDESC_SIZE);
+    T(log_items[1] == SG_LOGITEM_VALIDATE_BUFFERDESC_DATA);
+    T(log_items[2] == SG_LOGITEM_VALIDATION_FAILED);
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, make_image_validate_start_canary) {
+    setup(&(sg_desc){0});
+    const uint32_t pixels[8][8] = {0};
+    sg_image img = sg_make_image(&(sg_image_desc){
+        ._start_canary = 1234,
+        .width = 8,
+        .height = 8,
+        .data.subimage[0][0] = SG_RANGE(pixels),
+    });
+    T(sg_query_image_state(img) == SG_RESOURCESTATE_FAILED);
+    T(log_items[0] == SG_LOGITEM_VALIDATE_IMAGEDESC_CANARY);
+    T(log_items[1] == SG_LOGITEM_VALIDATION_FAILED);
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, make_image_validate_end_canary) {
+    setup(&(sg_desc){0});
+    const uint32_t pixels[8][8] = {0};
+    sg_image img = sg_make_image(&(sg_image_desc){
+        .width = 8,
+        .height = 8,
+        .data.subimage[0][0] = SG_RANGE(pixels),
+        ._end_canary = 1234,
+    });
+    T(sg_query_image_state(img) == SG_RESOURCESTATE_FAILED);
+    T(log_items[0] == SG_LOGITEM_VALIDATE_IMAGEDESC_CANARY);
+    T(log_items[1] == SG_LOGITEM_VALIDATION_FAILED);
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, make_image_zero_width_height) {
+    setup(&(sg_desc){0});
+    const uint32_t pixels[8][8] = {0};
+    sg_image img = sg_make_image(&(sg_image_desc){
+        .width = 0,
+        .height = 0,
+        .data.subimage[0][0] = SG_RANGE(pixels),
+    });
+    T(sg_query_image_state(img) == SG_RESOURCESTATE_FAILED);
+    T(log_items[0] == SG_LOGITEM_VALIDATE_IMAGEDESC_WIDTH);
+    T(log_items[1] == SG_LOGITEM_VALIDATE_IMAGEDESC_HEIGHT);
+    T(log_items[2] == SG_LOGITEM_VALIDATE_IMAGEDATA_DATA_SIZE);
+    T(log_items[3] == SG_LOGITEM_VALIDATION_FAILED);
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, make_image_validate_msaa_no_rt) {
+    setup(&(sg_desc){0});
+    const uint32_t pixels[8][8] = {0};
+    sg_image img = sg_make_image(&(sg_image_desc){
+        .width = 8,
+        .height = 8,
+        .sample_count = 4,
+        .data.subimage[0][0] = SG_RANGE(pixels),
+    });
+    T(sg_query_image_state(img) == SG_RESOURCESTATE_FAILED);
+    T(log_items[0] == SG_LOGITEM_VALIDATE_IMAGEDESC_MSAA_BUT_NO_RT);
+    T(log_items[1] == SG_LOGITEM_VALIDATION_FAILED);
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, make_image_validate_msaa_num_mipmaps) {
+    setup(&(sg_desc){0});
+    sg_image img = sg_make_image(&(sg_image_desc){
+        .render_target = true,
+        .width = 64,
+        .height = 64,
+        .sample_count = 4,
+        .num_mipmaps = 2,
+    });
+    T(sg_query_image_state(img) == SG_RESOURCESTATE_FAILED);
+    T(log_items[0] == SG_LOGITEM_VALIDATE_IMAGEDESC_MSAA_NUM_MIPMAPS);
+    T(log_items[1] == SG_LOGITEM_VALIDATION_FAILED);
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, make_image_validate_msaa_3d_image) {
+    setup(&(sg_desc){0});
+    sg_image img = sg_make_image(&(sg_image_desc){
+        .render_target = true,
+        .type = SG_IMAGETYPE_3D,
+        .width = 32,
+        .height = 32,
+        .num_slices = 32,
+        .sample_count = 4,
+    });
+    T(sg_query_image_state(img) == SG_RESOURCESTATE_FAILED);
+    T(log_items[0] == SG_LOGITEM_VALIDATE_IMAGEDESC_MSAA_3D_IMAGE);
+    T(log_items[1] == SG_LOGITEM_VALIDATION_FAILED);
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, make_image_validate_depth_3d_image_with_depth_format) {
+    setup(&(sg_desc){0});
+    sg_image img = sg_make_image(&(sg_image_desc){
+        .render_target = true,
+        .type = SG_IMAGETYPE_3D,
+        .width = 8,
+        .height = 8,
+        .num_slices = 8,
+        .pixel_format = SG_PIXELFORMAT_DEPTH,
+    });
+    T(sg_query_image_state(img) == SG_RESOURCESTATE_FAILED);
+    T(log_items[0] == SG_LOGITEM_VALIDATE_IMAGEDESC_DEPTH_3D_IMAGE);
+    T(log_items[1] == SG_LOGITEM_VALIDATION_FAILED);
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, make_image_validate_rt_immutable) {
+    setup(&(sg_desc){0});
+    sg_image img = sg_make_image(&(sg_image_desc){
+        .render_target = true,
+        .usage = SG_USAGE_DYNAMIC,
+        .width = 8,
+        .height = 8,
+    });
+    T(sg_query_image_state(img) == SG_RESOURCESTATE_FAILED);
+    T(log_items[0] == SG_LOGITEM_VALIDATE_IMAGEDESC_RT_IMMUTABLE);
+    T(log_items[1] == SG_LOGITEM_VALIDATION_FAILED);
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, make_image_validate_dynamic_no_data) {
+    setup(&(sg_desc){0});
+    uint32_t pixels[8][8] = {0};
+    sg_image img = sg_make_image(&(sg_image_desc){
+        .width = 8,
+        .height = 8,
+        .usage = SG_USAGE_DYNAMIC,
+        .data.subimage[0][0] = SG_RANGE(pixels),
+    });
+    T(sg_query_image_state(img) == SG_RESOURCESTATE_FAILED);
+    T(log_items[0] == SG_LOGITEM_VALIDATE_IMAGEDESC_DYNAMIC_NO_DATA);
+    T(log_items[1] == SG_LOGITEM_VALIDATION_FAILED);
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, make_image_valiate_compressed_immutable) {
+    setup(&(sg_desc){0});
+    sg_image img = sg_make_image(&(sg_image_desc){
+        .width = 8,
+        .height = 8,
+        .pixel_format = SG_PIXELFORMAT_BC1_RGBA,
+        .usage = SG_USAGE_DYNAMIC,
+    });
+    T(sg_query_image_state(img) == SG_RESOURCESTATE_FAILED);
+    T(log_items[0] == SG_LOGITEM_VALIDATE_IMAGEDESC_COMPRESSED_IMMUTABLE);
+    T(log_items[1] == SG_LOGITEM_VALIDATION_FAILED);
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, make_image_validate_nodata) {
+    setup(&(sg_desc){0});
+    sg_image img = sg_make_image(&(sg_image_desc){
+        .width = 8,
+        .height = 8,
+    });
+    T(sg_query_image_state(img) == SG_RESOURCESTATE_FAILED);
+    T(log_items[0] == SG_LOGITEM_VALIDATE_IMAGEDATA_NODATA);
+    T(log_items[1] == SG_LOGITEM_VALIDATE_IMAGEDATA_DATA_SIZE);
+    T(log_items[2] == SG_LOGITEM_VALIDATION_FAILED);
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, make_image_validate_data_size) {
+    setup(&(sg_desc){0});
+    uint32_t pixels[4][4] = {0};
+    sg_image img = sg_make_image(&(sg_image_desc){
+        .width = 8,
+        .height = 8,
+        .data.subimage[0][0] = SG_RANGE(pixels),
+    });
+    T(sg_query_image_state(img) == SG_RESOURCESTATE_FAILED);
+    T(log_items[0] == SG_LOGITEM_VALIDATE_IMAGEDATA_DATA_SIZE);
+    T(log_items[1] == SG_LOGITEM_VALIDATION_FAILED);
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, make_image_validate_missing_mipdata) {
+    setup(&(sg_desc){0});
+    uint32_t mip0[8][8] = {0};
+    uint32_t mip1[4][4] = {0};
+    uint32_t mip2[2][2] = {0};
+    sg_image img = sg_make_image(&(sg_image_desc){
+        .width = 8,
+        .height = 8,
+        .num_mipmaps = 4,
+        .data.subimage[0][0] = SG_RANGE(mip0),
+        .data.subimage[0][1] = SG_RANGE(mip1),
+        .data.subimage[0][2] = SG_RANGE(mip2),
+    });
+    T(sg_query_image_state(img) == SG_RESOURCESTATE_FAILED);
+    T(log_items[0] == SG_LOGITEM_VALIDATE_IMAGEDATA_NODATA);
+    T(log_items[1] == SG_LOGITEM_VALIDATE_IMAGEDATA_DATA_SIZE);
+    T(log_items[2] == SG_LOGITEM_VALIDATION_FAILED);
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, make_image_validate_wrong_mipsize) {
+    setup(&(sg_desc){0});
+    uint32_t mip0[8][8] = {0};
+    uint32_t mip1[4][4] = {0};
+    uint32_t mip2[2][2] = {0};
+    uint32_t mip3[1][1] = {0};
+    sg_image img = sg_make_image(&(sg_image_desc){
+        .width = 8,
+        .height = 8,
+        .num_mipmaps = 4,
+        .data.subimage[0][0] = SG_RANGE(mip0),
+        .data.subimage[0][1] = SG_RANGE(mip2),
+        .data.subimage[0][2] = SG_RANGE(mip1),
+        .data.subimage[0][3] = SG_RANGE(mip3)
+    });
+    T(sg_query_image_state(img) == SG_RESOURCESTATE_FAILED);
+    T(log_items[0] == SG_LOGITEM_VALIDATE_IMAGEDATA_DATA_SIZE);
+    T(log_items[1] == SG_LOGITEM_VALIDATE_IMAGEDATA_DATA_SIZE);
+    T(log_items[2] == SG_LOGITEM_VALIDATION_FAILED);
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, make_sampler_validate_start_canary) {
+    setup(&(sg_desc){0});
+    sg_sampler smp = sg_make_sampler(&(sg_sampler_desc){
+        ._start_canary = 1234,
+    });
+    T(sg_query_sampler_state(smp) == SG_RESOURCESTATE_FAILED);
+    T(log_items[0] == SG_LOGITEM_VALIDATE_SAMPLERDESC_CANARY);
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, make_sampler_validate_anistropic_requires_linear_filtering) {
+    setup(&(sg_desc){0});
+    sg_sampler smp;
+
+    smp = sg_make_sampler(&(sg_sampler_desc){
+        .max_anisotropy = 2,
+        .min_filter = SG_FILTER_LINEAR,
+        .mag_filter = SG_FILTER_LINEAR,
+        .mipmap_filter = SG_FILTER_NEAREST,
+    });
+    T(sg_query_sampler_state(smp) == SG_RESOURCESTATE_FAILED);
+    T(log_items[0] == SG_LOGITEM_VALIDATE_SAMPLERDESC_ANISTROPIC_REQUIRES_LINEAR_FILTERING);
+
+    reset_log_items();
+    smp = sg_make_sampler(&(sg_sampler_desc){
+        .max_anisotropy = 2,
+        .min_filter = SG_FILTER_LINEAR,
+        .mag_filter = SG_FILTER_LINEAR,
+        .mipmap_filter = SG_FILTER_NEAREST,
+    });
+    T(sg_query_sampler_state(smp) == SG_RESOURCESTATE_FAILED);
+    T(log_items[0] == SG_LOGITEM_VALIDATE_SAMPLERDESC_ANISTROPIC_REQUIRES_LINEAR_FILTERING);
+
+    reset_log_items();
+    smp = sg_make_sampler(&(sg_sampler_desc){
+        .max_anisotropy = 2,
+        .min_filter = SG_FILTER_NEAREST,
+        .mag_filter = SG_FILTER_LINEAR,
+        .mipmap_filter = SG_FILTER_LINEAR,
+    });
+    T(sg_query_sampler_state(smp) == SG_RESOURCESTATE_FAILED);
+    T(log_items[0] == SG_LOGITEM_VALIDATE_SAMPLERDESC_ANISTROPIC_REQUIRES_LINEAR_FILTERING);
+
+    reset_log_items();
+    smp = sg_make_sampler(&(sg_sampler_desc){
+        .max_anisotropy = 2,
+        .min_filter = SG_FILTER_LINEAR,
+        .mag_filter = SG_FILTER_NEAREST,
+        .mipmap_filter = SG_FILTER_LINEAR,
+    });
+    T(sg_query_sampler_state(smp) == SG_RESOURCESTATE_FAILED);
+    T(log_items[0] == SG_LOGITEM_VALIDATE_SAMPLERDESC_ANISTROPIC_REQUIRES_LINEAR_FILTERING);
+
+    reset_log_items();
+    smp = sg_make_sampler(&(sg_sampler_desc){
+        .max_anisotropy = 2,
+        .min_filter = SG_FILTER_LINEAR,
+        .mag_filter = SG_FILTER_LINEAR,
+        .mipmap_filter = SG_FILTER_LINEAR,
+    });
+    T(sg_query_sampler_state(smp) == SG_RESOURCESTATE_VALID);
+
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, make_attachments_validate_start_canary) {
+    setup(&(sg_desc){0});
+    sg_attachments atts = sg_make_attachments(&(sg_attachments_desc){
+        ._start_canary = 1234,
+        .colors[0].image = sg_make_image(&(sg_image_desc){
+            .render_target = true,
+            .width = 64,
+            .height = 64,
+        }),
+    });
+    T(sg_query_attachments_state(atts) == SG_RESOURCESTATE_FAILED);
+    T(log_items[0] == SG_LOGITEM_VALIDATE_ATTACHMENTSDESC_CANARY);
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, make_attachments_validate_end_canary) {
+    setup(&(sg_desc){0});
+    sg_attachments atts = sg_make_attachments(&(sg_attachments_desc){
+        .colors[0].image = sg_make_image(&(sg_image_desc){
+            .render_target = true,
+            .width = 64,
+            .height = 64,
+        }),
+        ._end_canary = 1234,
+    });
+    T(sg_query_attachments_state(atts) == SG_RESOURCESTATE_FAILED);
+    T(log_items[0] == SG_LOGITEM_VALIDATE_ATTACHMENTSDESC_CANARY);
+    T(log_items[1] == SG_LOGITEM_VALIDATION_FAILED);
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, make_attachments_validate_no_cont_color_atts1) {
+    setup(&(sg_desc){0});
+    const sg_image_desc img_desc = { .render_target = true, .width = 64, .height = 64 };
+    sg_attachments atts = sg_make_attachments(&(sg_attachments_desc){
+        .colors = {
+            [0].image = sg_make_image(&img_desc),
+            [2].image = sg_make_image(&img_desc),
+        }
+    });
+    T(sg_query_attachments_state(atts) == SG_RESOURCESTATE_FAILED);
+    T(log_items[0] == SG_LOGITEM_VALIDATE_ATTACHMENTSDESC_NO_CONT_COLOR_ATTS);
+    T(log_items[1] == SG_LOGITEM_VALIDATION_FAILED);
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, make_attachments_validate_image) {
+    setup(&(sg_desc){0});
+    const sg_image_desc img_desc = { .render_target = true, .width = 64, .height = 64 };
+    const sg_image img0 = sg_make_image(&img_desc);
+    const sg_image img1 = sg_make_image(&img_desc);
+    sg_destroy_image(img1);
+    const sg_attachments atts = sg_make_attachments(&(sg_attachments_desc){
+        .colors = {
+            [0].image = img0,
+            [1].image = img1,
+        }
+    });
+    T(sg_query_attachments_state(atts) == SG_RESOURCESTATE_FAILED);
+    T(log_items[0] == SG_LOGITEM_VALIDATE_ATTACHMENTSDESC_IMAGE);
+    T(log_items[1] == SG_LOGITEM_VALIDATION_FAILED);
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, make_attachments_validate_miplevel) {
+    setup(&(sg_desc){0});
+    const sg_image img = sg_make_image(&(sg_image_desc){
+        .render_target = true,
+        .width = 16,
+        .height = 16,
+        .num_mipmaps = 4,
+    });
+    const sg_attachments atts = sg_make_attachments(&(sg_attachments_desc){
+        .colors[0] = { .image = img, .mip_level = 4 }
+    });
+    T(sg_query_attachments_state(atts) == SG_RESOURCESTATE_FAILED);
+    T(log_items[0] == SG_LOGITEM_VALIDATE_ATTACHMENTSDESC_MIPLEVEL);
+    T(log_items[1] == SG_LOGITEM_VALIDATION_FAILED);
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, make_attachments_validate_face) {
+    setup(&(sg_desc){0});
+    const sg_image img = sg_make_image(&(sg_image_desc){
+        .render_target = true,
+        .type = SG_IMAGETYPE_CUBE,
+        .width = 64,
+        .height = 64,
+    });
+    const sg_attachments atts = sg_make_attachments(&(sg_attachments_desc){
+        .colors[0] = { .image = img, .slice = 6 }
+    });
+    T(sg_query_attachments_state(atts) == SG_RESOURCESTATE_FAILED);
+    T(log_items[0] == SG_LOGITEM_VALIDATE_ATTACHMENTSDESC_FACE);
+    T(log_items[1] == SG_LOGITEM_VALIDATION_FAILED);
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, make_attachments_validate_layer) {
+    setup(&(sg_desc){0});
+    const sg_image img = sg_make_image(&(sg_image_desc){
+        .render_target = true,
+        .type = SG_IMAGETYPE_ARRAY,
+        .width = 64,
+        .height = 64,
+        .num_slices = 4,
+    });
+    const sg_attachments atts = sg_make_attachments(&(sg_attachments_desc){
+        .colors[0] = { .image = img, .slice = 5 },
+    });
+    T(sg_query_attachments_state(atts) == SG_RESOURCESTATE_FAILED);
+    T(log_items[0] == SG_LOGITEM_VALIDATE_ATTACHMENTSDESC_LAYER);
+    T(log_items[1] == SG_LOGITEM_VALIDATION_FAILED);
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, make_attachments_validate_slice) {
+    setup(&(sg_desc){0});
+    const sg_image img = sg_make_image(&(sg_image_desc){
+        .render_target = true,
+        .type = SG_IMAGETYPE_3D,
+        .width = 64,
+        .height = 64,
+        .num_slices = 4,
+    });
+    const sg_attachments atts = sg_make_attachments(&(sg_attachments_desc){
+        .colors[0] = { .image = img, .slice = 5 },
+    });
+    T(sg_query_attachments_state(atts) == SG_RESOURCESTATE_FAILED);
+    T(log_items[0] == SG_LOGITEM_VALIDATE_ATTACHMENTSDESC_SLICE);
+    T(log_items[1] == SG_LOGITEM_VALIDATION_FAILED);
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, make_attachments_validate_image_no_rt) {
+    setup(&(sg_desc){0});
+    const sg_image img = sg_make_image(&(sg_image_desc){
+        .width = 8,
+        .height = 8,
+        .usage = SG_USAGE_DYNAMIC,
+    });
+    const sg_attachments atts = sg_make_attachments(&(sg_attachments_desc){
+        .colors[0].image = img,
+    });
+    T(sg_query_attachments_state(atts) == SG_RESOURCESTATE_FAILED);
+    T(log_items[0] == SG_LOGITEM_VALIDATE_ATTACHMENTSDESC_IMAGE_NO_RT);
+    T(log_items[1] == SG_LOGITEM_VALIDATION_FAILED);
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, make_attachments_validate_color_inv_pixelformat) {
+    setup(&(sg_desc){0});
+    const sg_image_desc img_desc = {
+        .render_target = true,
+        .width = 8,
+        .height = 8,
+        .pixel_format = SG_PIXELFORMAT_DEPTH,
+    };
+    reset_log_items();
+    const sg_attachments atts = sg_make_attachments(&(sg_attachments_desc){
+        .colors[0].image = sg_make_image(&img_desc),
+        .depth_stencil.image = sg_make_image(&img_desc),
+    });
+    T(sg_query_attachments_state(atts) == SG_RESOURCESTATE_FAILED);
+    T(log_items[0] == SG_LOGITEM_VALIDATE_ATTACHMENTSDESC_COLOR_INV_PIXELFORMAT);
+    T(log_items[1] == SG_LOGITEM_VALIDATION_FAILED);
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, make_attachments_validate_depth_inv_pixelformat) {
+    setup(&(sg_desc){0});
+    const sg_image_desc img_desc = {
+        .render_target = true,
+        .width = 8,
+        .height = 8,
+    };
+    const sg_attachments atts = sg_make_attachments(&(sg_attachments_desc){
+        .colors[0].image = sg_make_image(&img_desc),
+        .depth_stencil.image = sg_make_image(&img_desc),
+    });
+    T(sg_query_attachments_state(atts) == SG_RESOURCESTATE_FAILED);
+    T(log_items[0] == SG_LOGITEM_VALIDATE_ATTACHMENTSDESC_DEPTH_INV_PIXELFORMAT);
+    T(log_items[1] == SG_LOGITEM_VALIDATION_FAILED);
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, make_attachments_validate_image_sizes) {
+    setup(&(sg_desc){0});
+    const sg_image img0 = sg_make_image(&(sg_image_desc){
+        .render_target = true,
+        .width = 64,
+        .height = 64,
+    });
+    const sg_image img1 = sg_make_image(&(sg_image_desc){
+        .render_target = true,
+        .width = 32,
+        .height = 32,
+    });
+    const sg_attachments atts = sg_make_attachments(&(sg_attachments_desc){
+        .colors = {
+            [0].image = img0,
+            [1].image = img1,
+        }
+    });
+    T(sg_query_attachments_state(atts) == SG_RESOURCESTATE_FAILED);
+    T(log_items[0] == SG_LOGITEM_VALIDATE_ATTACHMENTSDESC_IMAGE_SIZES);
+    T(log_items[1] == SG_LOGITEM_VALIDATE_ATTACHMENTSDESC_IMAGE_SIZES);
+    T(log_items[2] == SG_LOGITEM_VALIDATION_FAILED);
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, make_attachments_validate_image_sample_counts) {
+    setup(&(sg_desc){0});
+    const sg_image img0 = sg_make_image(&(sg_image_desc){
+        .render_target = true,
+        .width = 64,
+        .height = 64,
+        .sample_count = 4,
+    });
+    const sg_image img1 = sg_make_image(&(sg_image_desc){
+        .render_target = true,
+        .width = 64,
+        .height = 64,
+        .sample_count = 2,
+    });
+    const sg_attachments atts = sg_make_attachments(&(sg_attachments_desc){
+        .colors = {
+            [0].image = img0,
+            [1].image = img1,
+        }
+    });
+    T(sg_query_attachments_state(atts) == SG_RESOURCESTATE_FAILED);
+    T(log_items[0] == SG_LOGITEM_VALIDATE_ATTACHMENTSDESC_IMAGE_SAMPLE_COUNTS);
+    T(log_items[1] == SG_LOGITEM_VALIDATION_FAILED);
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, make_attachments_validate_resolve_color_image_msaa) {
+    setup(&(sg_desc){0});
+    const sg_image color_img = sg_make_image(&(sg_image_desc){
+        .render_target = true,
+        .width = 64,
+        .height = 64,
+        .sample_count = 1,
+    });
+    const sg_image resolve_img = sg_make_image(&(sg_image_desc){
+        .render_target = true,
+        .width = 64,
+        .height = 64,
+        .sample_count = 1,
+    });
+    const sg_attachments atts = sg_make_attachments(&(sg_attachments_desc){
+        .colors[0].image = color_img,
+        .resolves[0].image = resolve_img,
+    });
+    T(sg_query_attachments_state(atts) == SG_RESOURCESTATE_FAILED);
+    T(log_items[0] == SG_LOGITEM_VALIDATE_ATTACHMENTSDESC_RESOLVE_COLOR_IMAGE_MSAA);
+    T(log_items[1] == SG_LOGITEM_VALIDATION_FAILED);
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, make_attachments_validate_resolve_image) {
+    setup(&(sg_desc){0});
+    const sg_image color_img = sg_make_image(&(sg_image_desc){
+        .render_target = true,
+        .width = 64,
+        .height = 64,
+        .sample_count = 4,
+    });
+    const sg_image resolve_img = sg_make_image(&(sg_image_desc){
+        .render_target = true,
+        .width = 64,
+        .height = 64,
+        .sample_count = 1,
+    });
+    sg_destroy_image(resolve_img);
+    const sg_attachments atts = sg_make_attachments(&(sg_attachments_desc){
+        .colors[0].image = color_img,
+        .resolves[0].image = resolve_img,
+    });
+    T(sg_query_attachments_state(atts) == SG_RESOURCESTATE_FAILED);
+    T(log_items[0] == SG_LOGITEM_VALIDATE_ATTACHMENTSDESC_RESOLVE_IMAGE);
+    T(log_items[1] == SG_LOGITEM_VALIDATION_FAILED);
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, make_attachments_validate_resolve_sample_count) {
+    setup(&(sg_desc){0});
+    const sg_image color_img = sg_make_image(&(sg_image_desc){
+        .render_target = true,
+        .width = 64,
+        .height = 64,
+        .sample_count = 4,
+    });
+    const sg_image resolve_img = sg_make_image(&(sg_image_desc){
+        .render_target = true,
+        .width = 64,
+        .height = 64,
+        .sample_count = 4,
+    });
+    const sg_attachments atts = sg_make_attachments(&(sg_attachments_desc){
+        .colors[0].image = color_img,
+        .resolves[0].image = resolve_img,
+    });
+    T(sg_query_attachments_state(atts) == SG_RESOURCESTATE_FAILED);
+    T(log_items[0] == SG_LOGITEM_VALIDATE_ATTACHMENTSDESC_RESOLVE_SAMPLE_COUNT);
+    T(log_items[1] == SG_LOGITEM_VALIDATION_FAILED);
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, make_attachments_validate_resolve_miplevel) {
+    setup(&(sg_desc){0});
+    const sg_image color_img = sg_make_image(&(sg_image_desc){
+        .render_target = true,
+        .width = 64,
+        .height = 64,
+        .sample_count = 4,
+    });
+    const sg_image resolve_img = sg_make_image(&(sg_image_desc){
+        .render_target = true,
+        .width = 64,
+        .height = 64,
+        .sample_count = 1,
+    });
+    const sg_attachments atts = sg_make_attachments(&(sg_attachments_desc){
+        .colors[0] = { .image = color_img },
+        .resolves[0] = { .image = resolve_img, .mip_level = 1 },
+    });
+    T(sg_query_attachments_state(atts) == SG_RESOURCESTATE_FAILED);
+    T(log_items[0] == SG_LOGITEM_VALIDATE_ATTACHMENTSDESC_RESOLVE_MIPLEVEL);
+    // FIXME: these are confusing
+    T(log_items[1] == SG_LOGITEM_VALIDATE_ATTACHMENTSDESC_RESOLVE_IMAGE_SIZES);
+    T(log_items[2] == SG_LOGITEM_VALIDATE_ATTACHMENTSDESC_RESOLVE_IMAGE_SIZES);
+    T(log_items[3] == SG_LOGITEM_VALIDATION_FAILED);
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, make_attachments_validate_resolve_face) {
+    setup(&(sg_desc){0});
+    const sg_image color_img = sg_make_image(&(sg_image_desc){
+        .render_target = true,
+        .width = 64,
+        .height = 64,
+        .sample_count = 4,
+    });
+    const sg_image resolve_img = sg_make_image(&(sg_image_desc){
+        .render_target = true,
+        .type = SG_IMAGETYPE_CUBE,
+        .width = 64,
+        .height = 64,
+        .sample_count = 1,
+    });
+    const sg_attachments atts = sg_make_attachments(&(sg_attachments_desc){
+        .colors[0] = { .image = color_img },
+        .resolves[0] = { .image = resolve_img, .slice = 6 },
+    });
+    T(sg_query_attachments_state(atts) == SG_RESOURCESTATE_FAILED);
+    T(log_items[0] == SG_LOGITEM_VALIDATE_ATTACHMENTSDESC_RESOLVE_FACE);
+    T(log_items[1] == SG_LOGITEM_VALIDATION_FAILED);
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, make_attachments_validate_resolve_layer) {
+    setup(&(sg_desc){0});
+    const sg_image color_img = sg_make_image(&(sg_image_desc){
+        .render_target = true,
+        .width = 64,
+        .height = 64,
+        .sample_count = 4,
+    });
+    const sg_image resolve_img = sg_make_image(&(sg_image_desc){
+        .render_target = true,
+        .type = SG_IMAGETYPE_ARRAY,
+        .width = 64,
+        .height = 64,
+        .num_slices = 4,
+        .sample_count = 1,
+    });
+    const sg_attachments atts = sg_make_attachments(&(sg_attachments_desc){
+        .colors[0] = { .image = color_img },
+        .resolves[0] = { .image = resolve_img, .slice = 4 },
+    });
+    T(sg_query_attachments_state(atts) == SG_RESOURCESTATE_FAILED);
+    T(log_items[0] == SG_LOGITEM_VALIDATE_ATTACHMENTSDESC_RESOLVE_LAYER);
+    T(log_items[1] == SG_LOGITEM_VALIDATION_FAILED);
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, make_attachments_validate_resolve_slice) {
+    setup(&(sg_desc){0});
+    const sg_image color_img = sg_make_image(&(sg_image_desc){
+        .render_target = true,
+        .width = 64,
+        .height = 64,
+        .sample_count = 4,
+    });
+    const sg_image resolve_img = sg_make_image(&(sg_image_desc){
+        .render_target = true,
+        .type = SG_IMAGETYPE_3D,
+        .width = 64,
+        .height = 64,
+        .num_slices = 4,
+        .sample_count = 1,
+    });
+    const sg_attachments atts = sg_make_attachments(&(sg_attachments_desc){
+        .colors[0] = { .image = color_img },
+        .resolves[0] = { .image = resolve_img, .slice = 4 },
+    });
+    T(sg_query_attachments_state(atts) == SG_RESOURCESTATE_FAILED);
+    T(log_items[0] == SG_LOGITEM_VALIDATE_ATTACHMENTSDESC_RESOLVE_SLICE);
+    T(log_items[1] == SG_LOGITEM_VALIDATION_FAILED);
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, make_attachments_validate_resolve_image_no_rt) {
+    setup(&(sg_desc){0});
+    const sg_image color_img = sg_make_image(&(sg_image_desc){
+        .render_target = true,
+        .width = 64,
+        .height = 64,
+        .sample_count = 4,
+    });
+    const sg_image resolve_img = sg_make_image(&(sg_image_desc){
+        .width = 64,
+        .height = 64,
+        .usage = SG_USAGE_DYNAMIC,
+        .sample_count = 1,
+    });
+    const sg_attachments atts = sg_make_attachments(&(sg_attachments_desc){
+        .colors[0] = { .image = color_img },
+        .resolves[0] = { .image = resolve_img },
+    });
+    T(sg_query_attachments_state(atts) == SG_RESOURCESTATE_FAILED);
+    T(log_items[0] == SG_LOGITEM_VALIDATE_ATTACHMENTSDESC_RESOLVE_IMAGE_NO_RT);
+    T(log_items[1] == SG_LOGITEM_VALIDATION_FAILED);
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, make_attachments_validate_resolve_image_sizes) {
+    setup(&(sg_desc){0});
+    const sg_image color_img = sg_make_image(&(sg_image_desc){
+        .render_target = true,
+        .width = 64,
+        .height = 64,
+        .sample_count = 4,
+    });
+    const sg_image resolve_img = sg_make_image(&(sg_image_desc){
+        .render_target = true,
+        .width = 32,
+        .height = 32,
+        .sample_count = 1,
+    });
+    const sg_attachments atts = sg_make_attachments(&(sg_attachments_desc){
+        .colors[0] = { .image = color_img },
+        .resolves[0] = { .image = resolve_img },
+    });
+    T(sg_query_attachments_state(atts) == SG_RESOURCESTATE_FAILED);
+    T(log_items[0] == SG_LOGITEM_VALIDATE_ATTACHMENTSDESC_RESOLVE_IMAGE_SIZES);
+    T(log_items[1] == SG_LOGITEM_VALIDATE_ATTACHMENTSDESC_RESOLVE_IMAGE_SIZES);
+    T(log_items[2] == SG_LOGITEM_VALIDATION_FAILED);
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, make_attachments_validate_resolve_image_format) {
+    setup(&(sg_desc){0});
+    const sg_image color_img = sg_make_image(&(sg_image_desc){
+        .render_target = true,
+        .width = 64,
+        .height = 64,
+        .sample_count = 4,
+    });
+    const sg_image resolve_img = sg_make_image(&(sg_image_desc){
+        .render_target = true,
+        .width = 64,
+        .height = 64,
+        .pixel_format = SG_PIXELFORMAT_R8,
+        .sample_count = 1,
+    });
+    const sg_attachments atts = sg_make_attachments(&(sg_attachments_desc){
+        .colors[0] = { .image = color_img },
+        .resolves[0] = { .image = resolve_img },
+    });
+    T(sg_query_attachments_state(atts) == SG_RESOURCESTATE_FAILED);
+    T(log_items[0] == SG_LOGITEM_VALIDATE_ATTACHMENTSDESC_RESOLVE_IMAGE_FORMAT);
+    T(log_items[1] == SG_LOGITEM_VALIDATION_FAILED);
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, make_attachments_validate_depth_image) {
+    setup(&(sg_desc){0});
+    const sg_image color_img = sg_make_image(&(sg_image_desc){
+        .render_target = true,
+        .width = 64,
+        .height = 64,
+    });
+    const sg_image depth_img = sg_make_image(&(sg_image_desc){
+        .render_target = true,
+        .width = 64,
+        .height = 64,
+        .pixel_format = SG_PIXELFORMAT_DEPTH,
+    });
+    sg_destroy_image(depth_img);
+    const sg_attachments atts = sg_make_attachments(&(sg_attachments_desc){
+        .colors[0] = { .image = color_img },
+        .depth_stencil.image = depth_img,
+    });
+    T(sg_query_attachments_state(atts) == SG_RESOURCESTATE_FAILED);
+    T(log_items[0] == SG_LOGITEM_VALIDATE_ATTACHMENTSDESC_DEPTH_IMAGE);
+    T(log_items[1] == SG_LOGITEM_VALIDATION_FAILED);
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, make_attachments_validate_depth_miplevel) {
+    setup(&(sg_desc){0});
+    const sg_image color_img = sg_make_image(&(sg_image_desc){
+        .render_target = true,
+        .width = 64,
+        .height = 64,
+    });
+    const sg_image depth_img = sg_make_image(&(sg_image_desc){
+        .render_target = true,
+        .width = 64,
+        .height = 64,
+        .pixel_format = SG_PIXELFORMAT_DEPTH,
+    });
+    const sg_attachments atts = sg_make_attachments(&(sg_attachments_desc){
+        .colors[0] = { .image = color_img },
+        .depth_stencil = { .image = depth_img, .mip_level = 1 },
+    });
+    T(sg_query_attachments_state(atts) == SG_RESOURCESTATE_FAILED);
+    T(log_items[0] == SG_LOGITEM_VALIDATE_ATTACHMENTSDESC_DEPTH_MIPLEVEL);
+    // FIXME: these additional validation errors are confusing
+    T(log_items[1] == SG_LOGITEM_VALIDATE_ATTACHMENTSDESC_DEPTH_IMAGE_SIZES);
+    T(log_items[2] == SG_LOGITEM_VALIDATE_ATTACHMENTSDESC_DEPTH_IMAGE_SIZES);
+    T(log_items[3] == SG_LOGITEM_VALIDATION_FAILED);
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, make_attachments_validate_depth_face) {
+    setup(&(sg_desc){0});
+    const sg_image color_img = sg_make_image(&(sg_image_desc){
+        .render_target = true,
+        .width = 64,
+        .height = 64,
+    });
+    const sg_image depth_img = sg_make_image(&(sg_image_desc){
+        .render_target = true,
+        .type = SG_IMAGETYPE_CUBE,
+        .width = 64,
+        .height = 64,
+        .pixel_format = SG_PIXELFORMAT_DEPTH,
+    });
+    const sg_attachments atts = sg_make_attachments(&(sg_attachments_desc){
+        .colors[0] = { .image = color_img },
+        .depth_stencil = { .image = depth_img, .slice = 6 },
+    });
+    T(sg_query_attachments_state(atts) == SG_RESOURCESTATE_FAILED);
+    T(log_items[0] == SG_LOGITEM_VALIDATE_ATTACHMENTSDESC_DEPTH_FACE);
+    T(log_items[1] == SG_LOGITEM_VALIDATION_FAILED);
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, make_attachments_validate_depth_layer) {
+    setup(&(sg_desc){0});
+    const sg_image color_img = sg_make_image(&(sg_image_desc){
+        .render_target = true,
+        .width = 64,
+        .height = 64,
+    });
+    const sg_image depth_img = sg_make_image(&(sg_image_desc){
+        .render_target = true,
+        .type = SG_IMAGETYPE_ARRAY,
+        .width = 64,
+        .height = 64,
+        .num_slices = 4,
+        .pixel_format = SG_PIXELFORMAT_DEPTH,
+    });
+    const sg_attachments atts = sg_make_attachments(&(sg_attachments_desc){
+        .colors[0] = { .image = color_img },
+        .depth_stencil = { .image = depth_img, .slice = 4 },
+    });
+    T(sg_query_attachments_state(atts) == SG_RESOURCESTATE_FAILED);
+    T(log_items[0] == SG_LOGITEM_VALIDATE_ATTACHMENTSDESC_DEPTH_LAYER);
+    T(log_items[1] == SG_LOGITEM_VALIDATION_FAILED);
+    sg_shutdown();
+}
+
+// NOTE: VALIDATE_PASSDESC_DEPTH_SLICE can't actually happen because VALIDATE_IMAGEDESC_DEPTH_3D_IMAGE
+
+// NOTE: VALIDATE_DEPTH_IMAGE_NO_RT can't actually happen because VALIDATE_IMAGEDESC_NONRT_PIXELFORMAT
+
+UTEST(sokol_gfx, make_attachments_validate_depth_image_sizes) {
+    setup(&(sg_desc){0});
+    const sg_image color_img = sg_make_image(&(sg_image_desc){
+        .render_target = true,
+        .width = 64,
+        .height = 64,
+    });
+    const sg_image depth_img = sg_make_image(&(sg_image_desc){
+        .render_target = true,
+        .width = 32,
+        .height = 32,
+        .pixel_format = SG_PIXELFORMAT_DEPTH,
+    });
+    const sg_attachments atts = sg_make_attachments(&(sg_attachments_desc){
+        .colors[0] = { .image = color_img },
+        .depth_stencil = { .image = depth_img },
+    });
+    T(sg_query_attachments_state(atts) == SG_RESOURCESTATE_FAILED);
+    T(log_items[0] == SG_LOGITEM_VALIDATE_ATTACHMENTSDESC_DEPTH_IMAGE_SIZES);
+    T(log_items[1] == SG_LOGITEM_VALIDATE_ATTACHMENTSDESC_DEPTH_IMAGE_SIZES);
+    T(log_items[2] == SG_LOGITEM_VALIDATION_FAILED);
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, make_attachments_validate_depth_image_sample_count) {
+    setup(&(sg_desc){0});
+    const sg_image color_img = sg_make_image(&(sg_image_desc){
+        .render_target = true,
+        .width = 64,
+        .height = 64,
+        .sample_count = 4,
+    });
+    const sg_image depth_img = sg_make_image(&(sg_image_desc){
+        .render_target = true,
+        .width = 64,
+        .height = 64,
+        .pixel_format = SG_PIXELFORMAT_DEPTH,
+        .sample_count = 2,
+    });
+    const sg_attachments atts = sg_make_attachments(&(sg_attachments_desc){
+        .colors[0] = { .image = color_img },
+        .depth_stencil = { .image = depth_img },
+    });
+    T(sg_query_attachments_state(atts) == SG_RESOURCESTATE_FAILED);
+    T(log_items[0] == SG_LOGITEM_VALIDATE_ATTACHMENTSDESC_DEPTH_IMAGE_SAMPLE_COUNT);
+    T(log_items[1] == SG_LOGITEM_VALIDATION_FAILED);
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, query_pixelformat_bytesperpixel) {
+    setup(&(sg_desc){0});
+    T(sg_query_pixelformat(SG_PIXELFORMAT_R8).bytes_per_pixel == 1);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_R8SN).bytes_per_pixel == 1);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_R8UI).bytes_per_pixel == 1);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_R8SI).bytes_per_pixel == 1);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_R16).bytes_per_pixel == 2);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_R16SN).bytes_per_pixel == 2);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_R16UI).bytes_per_pixel == 2);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_R16SI).bytes_per_pixel == 2);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_R16F).bytes_per_pixel == 2);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_RG8).bytes_per_pixel == 2);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_RG8SN).bytes_per_pixel == 2);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_RG8UI).bytes_per_pixel == 2);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_RG8SI).bytes_per_pixel == 2);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_R32UI).bytes_per_pixel == 4);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_R32SI).bytes_per_pixel == 4);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_R32F).bytes_per_pixel == 4);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_RG16).bytes_per_pixel == 4);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_RG16SN).bytes_per_pixel == 4);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_RG16UI).bytes_per_pixel == 4);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_RG16SI).bytes_per_pixel == 4);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_RG16F).bytes_per_pixel == 4);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_RGBA8).bytes_per_pixel == 4);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_SRGB8A8).bytes_per_pixel == 4);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_RGBA8SN).bytes_per_pixel == 4);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_RGBA8UI).bytes_per_pixel == 4);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_RGBA8SI).bytes_per_pixel == 4);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_BGRA8).bytes_per_pixel == 4);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_RGB10A2).bytes_per_pixel == 4);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_RG11B10F).bytes_per_pixel == 4);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_RGB9E5).bytes_per_pixel == 4);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_RG32UI).bytes_per_pixel == 8);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_RG32SI).bytes_per_pixel == 8);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_RG32F).bytes_per_pixel == 8);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_RGBA16).bytes_per_pixel == 8);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_RGBA16SN).bytes_per_pixel == 8);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_RGBA16UI).bytes_per_pixel == 8);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_RGBA16SI).bytes_per_pixel == 8);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_RGBA16F).bytes_per_pixel == 8);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_RGBA32UI).bytes_per_pixel == 16);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_RGBA32SI).bytes_per_pixel == 16);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_RGBA32F).bytes_per_pixel == 16);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_DEPTH).bytes_per_pixel == 4);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_DEPTH_STENCIL).bytes_per_pixel == 4);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_BC1_RGBA).bytes_per_pixel == 0);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_BC2_RGBA).bytes_per_pixel == 0);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_BC3_RGBA).bytes_per_pixel == 0);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_BC4_R).bytes_per_pixel == 0);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_BC4_RSN).bytes_per_pixel == 0);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_BC5_RG).bytes_per_pixel == 0);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_BC5_RGSN).bytes_per_pixel == 0);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_BC6H_RGBF).bytes_per_pixel == 0);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_BC6H_RGBUF).bytes_per_pixel == 0);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_BC7_RGBA).bytes_per_pixel == 0);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_PVRTC_RGB_2BPP).bytes_per_pixel == 0);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_PVRTC_RGB_4BPP).bytes_per_pixel == 0);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_PVRTC_RGBA_2BPP).bytes_per_pixel == 0);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_PVRTC_RGBA_4BPP).bytes_per_pixel == 0);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_ETC2_RGB8).bytes_per_pixel == 0);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_ETC2_RGB8A1).bytes_per_pixel == 0);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_ETC2_RGBA8).bytes_per_pixel == 0);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_EAC_R11).bytes_per_pixel == 0);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_EAC_R11SN).bytes_per_pixel == 0);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_EAC_R11).bytes_per_pixel == 0);
+    T(sg_query_pixelformat(SG_PIXELFORMAT_EAC_R11SN).bytes_per_pixel == 0);
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, query_pixelformat_compressed) {
+    setup(&(sg_desc){0});
+    int i = SG_PIXELFORMAT_NONE + 1;
+    for (; i < SG_PIXELFORMAT_BC1_RGBA; i++) {
+        T(sg_query_pixelformat((sg_pixel_format)i).compressed == false);
+    }
+    for (; i < _SG_PIXELFORMAT_NUM; i++) {
+        T(sg_query_pixelformat((sg_pixel_format)i).compressed == true);
+    }
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, query_row_pitch) {
+    setup(&(sg_desc){0});
+    T(sg_query_row_pitch(SG_PIXELFORMAT_R8, 13, 1) == 13);
+    T(sg_query_row_pitch(SG_PIXELFORMAT_R8, 13, 32) == 32);
+    T(sg_query_row_pitch(SG_PIXELFORMAT_RG8SN, 256, 16) == 512);
+    T(sg_query_row_pitch(SG_PIXELFORMAT_RGBA8, 256, 16) == 1024);
+    T(sg_query_row_pitch(SG_PIXELFORMAT_BC1_RGBA, 1024, 1) == 2048);
+    T(sg_query_row_pitch(SG_PIXELFORMAT_BC1_RGBA, 1, 1) == 8);
+    T(sg_query_row_pitch(SG_PIXELFORMAT_DEPTH, 256, 4) == 1024);
+    T(sg_query_row_pitch(SG_PIXELFORMAT_DEPTH_STENCIL, 256, 4) == 1024);
+    sg_shutdown();
+}
+
+UTEST(sokol_gfx, sg_query_surface_pitch) {
+    setup(&(sg_desc){0});
+    T(sg_query_surface_pitch(SG_PIXELFORMAT_R8, 256, 256, 1) == (256 * 256));
+    T(sg_query_surface_pitch(SG_PIXELFORMAT_R8, 256, 256, 1024) == (256 * 1024));
+    T(sg_query_surface_pitch(SG_PIXELFORMAT_RG8, 1, 1, 1) == 2);
+    T(sg_query_surface_pitch(SG_PIXELFORMAT_RG8, 256, 256, 4) == (256 * 256 * 2));
+    T(sg_query_surface_pitch(SG_PIXELFORMAT_RGBA32F, 256, 256, 1) == (256 * 256 * 16));
+    T(sg_query_surface_pitch(SG_PIXELFORMAT_BC1_RGBA, 256, 256, 1) == (256 * 2 * 64));
+    T(sg_query_surface_pitch(SG_PIXELFORMAT_BC1_RGBA, 256, 1, 1) == (256 * 2));
+    T(sg_query_surface_pitch(SG_PIXELFORMAT_BC1_RGBA, 256, 2, 1) == (256 * 2));
+    T(sg_query_surface_pitch(SG_PIXELFORMAT_BC1_RGBA, 256, 3, 1) == (256 * 2));
+    T(sg_query_surface_pitch(SG_PIXELFORMAT_BC1_RGBA, 256, 4, 1) == (256 * 2));
+    T(sg_query_surface_pitch(SG_PIXELFORMAT_BC1_RGBA, 256, 5, 1) == (256 * 2 * 2));
     sg_shutdown();
 }

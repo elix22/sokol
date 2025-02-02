@@ -39,6 +39,7 @@
 
     - on macOS: AudioToolbox
     - on iOS: AudioToolbox, AVFoundation
+    - on FreeBSD: asound
     - on Linux: asound
     - on Android: link with OpenSLES or aaudio
     - on Windows with MSVC or Clang toolchain: no action needed, libs are defined in-source via pragma-comment-lib
@@ -51,6 +52,7 @@
 
     - Windows: WASAPI
     - Linux: ALSA
+    - FreeBSD: ALSA
     - macOS: CoreAudio
     - iOS: CoreAudio+AVAudioSession
     - emscripten: WebAudio with ScriptProcessorNode
@@ -397,8 +399,8 @@
             saudio_setup(&(saudio_desc){
                 // ...
                 .allocator = {
-                    .alloc = my_alloc,
-                    .free = my_free,
+                    .alloc_fn = my_alloc,
+                    .free_fn = my_free,
                     .user_data = ...,
                 }
             });
@@ -450,6 +452,7 @@
     If you don't want to provide your own custom logger it is highly recommended to use
     the standard logger in sokol_log.h instead, otherwise you won't see any warnings or
     errors.
+
 
     LICENSE
     =======
@@ -575,12 +578,12 @@ typedef struct saudio_logger {
 
     Used in saudio_desc to provide custom memory-alloc and -free functions
     to sokol_audio.h. If memory management should be overridden, both the
-    alloc and free function must be provided (e.g. it's not valid to
+    alloc_fn and free_fn function must be provided (e.g. it's not valid to
     override one function but not the other).
 */
 typedef struct saudio_allocator {
-    void* (*alloc)(size_t size, void* user_data);
-    void (*free)(void* ptr, void* user_data);
+    void* (*alloc_fn)(size_t size, void* user_data);
+    void (*free_fn)(void* ptr, void* user_data);
     void* user_data;
 } saudio_allocator;
 
@@ -780,7 +783,9 @@ inline void saudio_setup(const saudio_desc& desc) { return saudio_setup(&desc); 
         #include "aaudio/AAudio.h"
     #endif
 #elif defined(_SAUDIO_LINUX)
-    #include <alloca.h>
+    #if !defined(__FreeBSD__)
+        #include <alloca.h>
+    #endif
     #define _SAUDIO_PTHREADS (1)
     #include <pthread.h>
     #define ALSA_PCM_NEW_HW_PARAMS_API
@@ -1063,6 +1068,7 @@ typedef struct {
 /* sokol-audio state */
 typedef struct {
     bool valid;
+    bool setup_called;
     void (*stream_cb)(float* buffer, int num_frames, int num_channels);
     void (*stream_userdata_cb)(float* buffer, int num_frames, int num_channels, void* user_data);
     void* user_data;
@@ -1146,10 +1152,9 @@ _SOKOL_PRIVATE void _saudio_clear(void* ptr, size_t size) {
 _SOKOL_PRIVATE void* _saudio_malloc(size_t size) {
     SOKOL_ASSERT(size > 0);
     void* ptr;
-    if (_saudio.desc.allocator.alloc) {
-        ptr = _saudio.desc.allocator.alloc(size, _saudio.desc.allocator.user_data);
-    }
-    else {
+    if (_saudio.desc.allocator.alloc_fn) {
+        ptr = _saudio.desc.allocator.alloc_fn(size, _saudio.desc.allocator.user_data);
+    } else {
         ptr = malloc(size);
     }
     if (0 == ptr) {
@@ -1165,10 +1170,9 @@ _SOKOL_PRIVATE void* _saudio_malloc_clear(size_t size) {
 }
 
 _SOKOL_PRIVATE void _saudio_free(void* ptr) {
-    if (_saudio.desc.allocator.free) {
-        _saudio.desc.allocator.free(ptr, _saudio.desc.allocator.user_data);
-    }
-    else {
+    if (_saudio.desc.allocator.free_fn) {
+        _saudio.desc.allocator.free_fn(ptr, _saudio.desc.allocator.user_data);
+    } else {
         free(ptr);
     }
 }
@@ -1427,8 +1431,8 @@ _SOKOL_PRIVATE int _saudio_fifo_read(_saudio_fifo_t* fifo, uint8_t* ptr, int num
 _SOKOL_PRIVATE bool _saudio_dummy_backend_init(void) {
     _saudio.bytes_per_frame = _saudio.num_channels * (int)sizeof(float);
     return true;
-};
-_SOKOL_PRIVATE void _saudio_dummy_backend_shutdown(void) { };
+}
+_SOKOL_PRIVATE void _saudio_dummy_backend_shutdown(void) { }
 
 //  █████  ██      ███████  █████
 // ██   ██ ██      ██      ██   ██
@@ -1847,7 +1851,7 @@ EM_JS(int, saudio_js_init, (int sample_rate, int num_channels, int buffer_size),
     else {
         return 0;
     }
-});
+})
 
 /* shutdown the WebAudioContext and ScriptProcessorNode */
 EM_JS(void, saudio_js_shutdown, (void), {
@@ -1861,7 +1865,7 @@ EM_JS(void, saudio_js_shutdown, (void), {
         Module._saudio_context = null;
         Module._saudio_node = null;
     }
-});
+})
 
 /* get the actual sample rate back from the WebAudio context */
 EM_JS(int, saudio_js_sample_rate, (void), {
@@ -1871,7 +1875,7 @@ EM_JS(int, saudio_js_sample_rate, (void), {
     else {
         return 0;
     }
-});
+})
 
 /* get the actual buffer size in number of frames */
 EM_JS(int, saudio_js_buffer_frames, (void), {
@@ -1881,7 +1885,7 @@ EM_JS(int, saudio_js_buffer_frames, (void), {
     else {
         return 0;
     }
-});
+})
 
 /* return 1 if the WebAudio context is currently suspended, else 0 */
 EM_JS(int, saudio_js_suspended, (void), {
@@ -1893,7 +1897,7 @@ EM_JS(int, saudio_js_suspended, (void), {
             return 0;
         }
     }
-});
+})
 
 _SOKOL_PRIVATE bool _saudio_webaudio_backend_init(void) {
     if (saudio_js_init(_saudio.sample_rate, _saudio.num_channels, _saudio.buffer_frames)) {
@@ -2469,7 +2473,7 @@ void _saudio_backend_shutdown(void) {
     #elif defined(SAUDIO_ANDROID_SLES)
         _saudio_sles_backend_shutdown();
     #elif defined(_SAUDIO_APPLE)
-        return _saudio_coreaudio_backend_shutdown();
+        _saudio_coreaudio_backend_shutdown();
     #else
     #error "unknown platform"
     #endif
@@ -2484,9 +2488,11 @@ void _saudio_backend_shutdown(void) {
 // >>public
 SOKOL_API_IMPL void saudio_setup(const saudio_desc* desc) {
     SOKOL_ASSERT(!_saudio.valid);
+    SOKOL_ASSERT(!_saudio.setup_called);
     SOKOL_ASSERT(desc);
-    SOKOL_ASSERT((desc->allocator.alloc && desc->allocator.free) || (!desc->allocator.alloc && !desc->allocator.free));
+    SOKOL_ASSERT((desc->allocator.alloc_fn && desc->allocator.free_fn) || (!desc->allocator.alloc_fn && !desc->allocator.free_fn));
     _saudio_clear(&_saudio, sizeof(_saudio));
+    _saudio.setup_called = true;
     _saudio.desc = *desc;
     _saudio.stream_cb = desc->stream_cb;
     _saudio.stream_userdata_cb = desc->stream_userdata_cb;
@@ -2517,6 +2523,8 @@ SOKOL_API_IMPL void saudio_setup(const saudio_desc* desc) {
 }
 
 SOKOL_API_IMPL void saudio_shutdown(void) {
+    SOKOL_ASSERT(_saudio.setup_called);
+    _saudio.setup_called = false;
     if (_saudio.valid) {
         _saudio_backend_shutdown();
         _saudio_fifo_shutdown(&_saudio.fifo);
@@ -2530,26 +2538,32 @@ SOKOL_API_IMPL bool saudio_isvalid(void) {
 }
 
 SOKOL_API_IMPL void* saudio_userdata(void) {
+    SOKOL_ASSERT(_saudio.setup_called);
     return _saudio.desc.user_data;
 }
 
 SOKOL_API_IMPL saudio_desc saudio_query_desc(void) {
+    SOKOL_ASSERT(_saudio.setup_called);
     return _saudio.desc;
 }
 
 SOKOL_API_IMPL int saudio_sample_rate(void) {
+    SOKOL_ASSERT(_saudio.setup_called);
     return _saudio.sample_rate;
 }
 
 SOKOL_API_IMPL int saudio_buffer_frames(void) {
+    SOKOL_ASSERT(_saudio.setup_called);
     return _saudio.buffer_frames;
 }
 
 SOKOL_API_IMPL int saudio_channels(void) {
+    SOKOL_ASSERT(_saudio.setup_called);
     return _saudio.num_channels;
 }
 
 SOKOL_API_IMPL bool saudio_suspended(void) {
+    SOKOL_ASSERT(_saudio.setup_called);
     #if defined(_SAUDIO_EMSCRIPTEN)
         if (_saudio.valid) {
             return 1 == saudio_js_suspended();
@@ -2563,6 +2577,7 @@ SOKOL_API_IMPL bool saudio_suspended(void) {
 }
 
 SOKOL_API_IMPL int saudio_expect(void) {
+    SOKOL_ASSERT(_saudio.setup_called);
     if (_saudio.valid) {
         const int num_frames = _saudio_fifo_writable_bytes(&_saudio.fifo) / _saudio.bytes_per_frame;
         return num_frames;
@@ -2573,6 +2588,7 @@ SOKOL_API_IMPL int saudio_expect(void) {
 }
 
 SOKOL_API_IMPL int saudio_push(const float* frames, int num_frames) {
+    SOKOL_ASSERT(_saudio.setup_called);
     SOKOL_ASSERT(frames && (num_frames > 0));
     if (_saudio.valid) {
         const int num_bytes = num_frames * _saudio.bytes_per_frame;

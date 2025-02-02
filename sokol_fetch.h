@@ -498,7 +498,7 @@
 
         After the user callback returns, and all file data has been loaded
         (response.finished flag is set) the request has reached its end-of-life
-        and will recycled.
+        and will be recycled.
 
         Otherwise, if there's still data to load (because streaming was
         requested by providing a non-zero request.chunk_size), the request
@@ -610,7 +610,7 @@
     without downloading the entire file first (the Content-Length response
     header only provides the compressed size). Furthermore, for HTTP
     range-requests, the range is given on the compressed data, not the
-    uncompressed data. So if the web server decides to server the data
+    uncompressed data. So if the web server decides to serve the data
     compressed, the content-length and range-request parameters don't
     correspond to the uncompressed data that's arriving in the sokol-fetch
     buffers, and there's no way from JS or WASM to either force uncompressed
@@ -671,7 +671,7 @@
     When a request is sent to a channel via sfetch_send(), a "free lane" will
     be picked and assigned to the request. The request will occupy this lane
     for its entire life time (also while it is paused). If all lanes of a
-    channel are currently occupied, new requests will need to wait until a
+    channel are currently occupied, new requests will wait until a
     lane becomes unoccupied.
 
     Since the number of channels and lanes is known upfront, it is guaranteed
@@ -800,7 +800,7 @@
 
     On platforms with threading support, each channel runs on its own
     thread, but this is mainly an implementation detail to work around
-    the blocking traditional file IO functions, not for performance reasons.
+    the traditional blocking file IO functions, not for performance reasons.
 
 
     MEMORY ALLOCATION OVERRIDE
@@ -820,8 +820,8 @@
             sfetch_setup(&(sfetch_desc_t){
                 // ...
                 .allocator = {
-                    .alloc = my_alloc,
-                    .free = my_free,
+                    .alloc_fn = my_alloc,
+                    .free_fn = my_free,
                     .user_data = ...,
                 }
             });
@@ -1024,8 +1024,8 @@ typedef struct sfetch_range_t {
     override one function but not the other).
 */
 typedef struct sfetch_allocator_t {
-    void* (*alloc)(size_t size, void* user_data);
-    void (*free)(void* ptr, void* user_data);
+    void* (*alloc_fn)(size_t size, void* user_data);
+    void (*free_fn)(void* ptr, void* user_data);
     void* user_data;
 } sfetch_allocator_t;
 
@@ -1071,17 +1071,14 @@ typedef struct sfetch_response_t {
     sfetch_range_t buffer;          // the user-provided buffer which holds the fetched data
 } sfetch_response_t;
 
-/* response callback function signature */
-typedef void(*sfetch_callback_t)(const sfetch_response_t*);
-
 /* request parameters passed to sfetch_send() */
 typedef struct sfetch_request_t {
-    uint32_t channel;               // index of channel this request is assigned to (default: 0)
-    const char* path;               // filesystem path or HTTP URL (required)
-    sfetch_callback_t callback;     // response callback function pointer (required)
-    uint32_t chunk_size;            // number of bytes to load per stream-block (optional)
-    sfetch_range_t buffer;          // a memory buffer where the data will be loaded into (optional)
-    sfetch_range_t user_data;       // ptr/size of a POD user data block which will be memcpy'd (optional)
+    uint32_t channel;                                // index of channel this request is assigned to (default: 0)
+    const char* path;                                // filesystem path or HTTP URL (required)
+    void (*callback) (const sfetch_response_t*);     // response callback function pointer (required)
+    uint32_t chunk_size;                             // number of bytes to load per stream-block (optional)
+    sfetch_range_t buffer;                           // a memory buffer where the data will be loaded into (optional)
+    sfetch_range_t user_data;                        // ptr/size of a POD user data block which will be memcpy'd (optional)
 } sfetch_request_t;
 
 /* setup sokol-fetch (can be called on multiple threads) */
@@ -1204,6 +1201,11 @@ inline sfetch_handle_t sfetch_send(const sfetch_request_t& request) { return sfe
     #define _SFETCH_HAS_THREADS (1)
 #endif
 
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable:4724) // potential mod by 0
+#endif
+
 // ███████ ████████ ██████  ██    ██  ██████ ████████ ███████
 // ██         ██    ██   ██ ██    ██ ██         ██    ██
 // ███████    ██    ██████  ██    ██ ██         ██    ███████
@@ -1302,7 +1304,7 @@ typedef struct {
     uint32_t channel;
     uint32_t lane;
     uint32_t chunk_size;
-    sfetch_callback_t callback;
+    void (*callback) (const sfetch_response_t*);
     sfetch_range_t buffer;
 
     /* updated by IO-thread, off-limits to user thread */
@@ -1424,10 +1426,9 @@ _SOKOL_PRIVATE void _sfetch_clear(void* ptr, size_t size) {
 _SOKOL_PRIVATE void* _sfetch_malloc_with_allocator(const sfetch_allocator_t* allocator, size_t size) {
     SOKOL_ASSERT(size > 0);
     void* ptr;
-    if (allocator->alloc) {
-        ptr = allocator->alloc(size, allocator->user_data);
-    }
-    else {
+    if (allocator->alloc_fn) {
+        ptr = allocator->alloc_fn(size, allocator->user_data);
+    } else {
         ptr = malloc(size);
     }
     if (0 == ptr) {
@@ -1447,10 +1448,9 @@ _SOKOL_PRIVATE void* _sfetch_malloc_clear(size_t size) {
 }
 
 _SOKOL_PRIVATE void _sfetch_free(void* ptr) {
-    if (_sfetch->desc.allocator.free) {
-        _sfetch->desc.allocator.free(ptr, _sfetch->desc.allocator.user_data);
-    }
-    else {
+    if (_sfetch->desc.allocator.free_fn) {
+        _sfetch->desc.allocator.free_fn(ptr, _sfetch->desc.allocator.user_data);
+    } else {
         free(ptr);
     }
 }
@@ -2213,7 +2213,7 @@ EM_JS(void, sfetch_js_send_head_request, (uint32_t slot_id, const char* path_cst
         }
     };
     req.send();
-});
+})
 
 /* if bytes_to_read != 0, a range-request will be sent, otherwise a normal request */
 EM_JS(void, sfetch_js_send_get_request, (uint32_t slot_id, const char* path_cstr, uint32_t offset, uint32_t bytes_to_read, void* buf_ptr, uint32_t buf_size), {
@@ -2244,7 +2244,7 @@ EM_JS(void, sfetch_js_send_get_request, (uint32_t slot_id, const char* path_cstr
         }
     };
     req.send();
-});
+})
 
 /*=== emscripten specific C helper functions =================================*/
 #ifdef __cplusplus
@@ -2363,7 +2363,7 @@ _SOKOL_PRIVATE void _sfetch_request_handler(_sfetch_t* ctx, uint32_t slot_id) {
     }
     else {
         /* just move all other items (e.g. paused or cancelled)
-           into the outgoing queue, so they wont get lost
+           into the outgoing queue, so they won't get lost
         */
         _sfetch_ring_enqueue(&ctx->chn[item->channel].user_outgoing, slot_id);
     }
@@ -2457,6 +2457,12 @@ _SOKOL_PRIVATE void _sfetch_invoke_response_callback(_sfetch_item_t* item) {
     item->callback(&response);
 }
 
+_SOKOL_PRIVATE void _sfetch_cancel_item(_sfetch_item_t* item) {
+    item->state = _SFETCH_STATE_FAILED;
+    item->user.finished = true;
+    item->user.error_code = SFETCH_ERROR_CANCELLED;
+}
+
 /* per-frame channel stuff: move requests in and out of the IO threads, call response callbacks */
 _SOKOL_PRIVATE void _sfetch_channel_dowork(_sfetch_channel_t* chn, _sfetch_pool_t* pool) {
 
@@ -2469,9 +2475,16 @@ _SOKOL_PRIVATE void _sfetch_channel_dowork(_sfetch_channel_t* chn, _sfetch_pool_
         _sfetch_item_t* item = _sfetch_pool_item_lookup(pool, slot_id);
         SOKOL_ASSERT(item);
         SOKOL_ASSERT(item->state == _SFETCH_STATE_ALLOCATED);
+        // if the item was cancelled early, kick it out immediately
+        if (item->user.cancel) {
+            _sfetch_cancel_item(item);
+            _sfetch_invoke_response_callback(item);
+            _sfetch_pool_item_free(pool, slot_id);
+            continue;
+        }
         item->state = _SFETCH_STATE_DISPATCHED;
         item->lane = _sfetch_ring_dequeue(&chn->free_lanes);
-        /* if no buffer provided yet, invoke response callback to do so */
+        // if no buffer provided yet, invoke response callback to do so
         if (0 == item->buffer.ptr) {
             _sfetch_invoke_response_callback(item);
         }
@@ -2498,8 +2511,7 @@ _SOKOL_PRIVATE void _sfetch_channel_dowork(_sfetch_channel_t* chn, _sfetch_pool_
             item->user.cont = false;
         }
         if (item->user.cancel) {
-            item->state = _SFETCH_STATE_FAILED;
-            item->user.finished = true;
+            _sfetch_cancel_item(item);
         }
         switch (item->state) {
             case _SFETCH_STATE_DISPATCHED:
@@ -2541,7 +2553,7 @@ _SOKOL_PRIVATE void _sfetch_channel_dowork(_sfetch_channel_t* chn, _sfetch_pool_
         item->user.fetched_offset = item->thread.fetched_offset;
         item->user.fetched_size = item->thread.fetched_size;
         if (item->user.cancel) {
-            item->user.error_code = SFETCH_ERROR_CANCELLED;
+            _sfetch_cancel_item(item);
         }
         else {
             item->user.error_code = item->thread.error_code;
@@ -2558,7 +2570,7 @@ _SOKOL_PRIVATE void _sfetch_channel_dowork(_sfetch_channel_t* chn, _sfetch_pool_
         }
         _sfetch_invoke_response_callback(item);
 
-        /* when the request is finish, free the lane for another request,
+        /* when the request is finished, free the lane for another request,
            otherwise feed it back into the incoming queue
         */
         if (item->user.finished) {
@@ -2608,7 +2620,7 @@ _SOKOL_PRIVATE bool _sfetch_validate_request(_sfetch_t* ctx, const sfetch_reques
 }
 
 _SOKOL_PRIVATE sfetch_desc_t _sfetch_desc_defaults(const sfetch_desc_t* desc) {
-    SOKOL_ASSERT((desc->allocator.alloc && desc->allocator.free) || (!desc->allocator.alloc && !desc->allocator.free));
+    SOKOL_ASSERT((desc->allocator.alloc_fn && desc->allocator.free_fn) || (!desc->allocator.alloc_fn && !desc->allocator.free_fn));
     sfetch_desc_t res = *desc;
     res.max_requests = _sfetch_def(desc->max_requests, 128);
     res.num_channels = _sfetch_def(desc->num_channels, 1);
@@ -2799,4 +2811,9 @@ SOKOL_API_IMPL void sfetch_cancel(sfetch_handle_t h) {
         item->user.cancel = true;
     }
 }
+
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
+
 #endif /* SOKOL_FETCH_IMPL */
