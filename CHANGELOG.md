@@ -1,5 +1,32 @@
 ## Updates
 
+### 08-Mar-2025
+
+Initial compute shader support has been merged into sokol_gfx.h.
+
+Please read this [blog post](https://floooh.github.io/2025/03/03/sokol-gfx-compute-update.html)
+for what that means in detail and for links to new sample code.
+
+The update is mostly backward compatible (with one minor exception,
+`sg_features.storage_buffer` has been renamed `sg_features.compute`).
+
+Related PRs:
+
+- sokol: https://github.com/floooh/sokol/pull/1200
+- sokol-tools (shdc): https://github.com/floooh/sokol-tools/pull/173
+- sokol-samples: https://github.com/floooh/sokol-samples/pull/162
+
+Most bindings got a new compute-shader sample, see the bindings PRs for
+details:
+
+- Zig: https://github.com/floooh/sokol-zig/pull/100
+- Odin: https://github.com/floooh/sokol-odin/pull/28
+- Nim: https://github.com/floooh/sokol-nim/pull/35
+- Rust: https://github.com/floooh/sokol-rust/pull/33
+- C3: https://github.com/floooh/sokol-c3/pull/1
+- D: https://github.com/kassane/sokol-d/pull/56
+- Jai: https://github.com/colinbellino/sokol-jai/pull/5
+
 ### 10-Feb-2025
 
 The [sokol-c3](https://github.com/floooh/sokol-c3) bindings are now 'official'
@@ -19,7 +46,7 @@ Related pull request: https://github.com/floooh/sokol/pull/1148
 
   Many thanks to @jdah for bringing up the issue and providing the PR and sample code!
 
-- sokol_gfx.h: removed support for PRVTC compressed pixel formats (the latest iOS SDK started
+- sokol_gfx.h: removed support for PVRTC compressed pixel formats (the latest iOS SDK started
   to issue deprecation warnings, and this also removed quite a lot of hacky special-case code from
   sokol_gfx.h). In the unlikely case that you were still using PVRTC textures, please switch
   to the ETC2 or ASTC formats instead (associated ticket: https://github.com/floooh/sokol/issues/1206)
@@ -97,7 +124,7 @@ Related PR: https://github.com/floooh/sokol/pull/1176, many thanks to
   stashed directly in a Dear ImGui ImTextureID handle instead of in a separate backing
   object (this is possible now because ImTextureID is now guaranteed to be 64 bits,
   so it can directly hold two 32-bit sokol-gfx handles). This change drastically
-  simplifies the sokol_imgui.h implementatation, but requires some breaking API
+  simplifies the sokol_imgui.h implementation, but requires some breaking API
   changes (please read the updated doc section `ON USER-PROVIDED IMAGES AND SAMPLERS`
   in sokol_imgui.h)
 - sokol_gfx.h: a couple of new functions to get granular buffer and image properties
@@ -341,7 +368,7 @@ Drive by fixes:
 ### 17-Sep-2024
 
 - The sokol_app.h Linux backend now has clipboard support. Many thanks to
-  @Dvad for the initial PR with most of the work and @qwx9 for the addtional
+  @Dvad for the initial PR with most of the work and @qwx9 for the additional
   updates. See PR https://github.com/floooh/sokol/pull/1108 for details (this
   isn't quite what ended up in sokol_app.h either, because I did a couple of code
   cleanup changes during the merge).
