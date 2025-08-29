@@ -9020,7 +9020,10 @@ void ANativeActivity_onCreate(ANativeActivity* activity, void* saved_state, size
     // activity pointer twice, once before sokol_main() and once after _sapp_init_state()
     _sapp_clear(&_sapp, sizeof(_sapp));
     _sapp.android.activity = activity;
-    sapp_desc desc = sokol_main(0, NULL);
+    // elix22 - passing the activity pointer , there is a need to retrieve the assetManager instance
+    char* argv[1];
+    argv[0] = (char*) activity;
+    sapp_desc desc = sokol_main(1, argv);
     _sapp_init_state(&desc);
     _sapp.android.activity = activity;
 

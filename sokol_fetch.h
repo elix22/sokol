@@ -1245,7 +1245,11 @@ typedef struct {
 
 /* file handle abstraction */
 #if _SFETCH_PLATFORM_POSIX
-typedef FILE* _sfetch_file_handle_t;
+#if defined(__ANDROID__) // elix22 - using my own implementation for Android
+    typedef void* _sfetch_file_handle_t;
+#else
+    typedef FILE* _sfetch_file_handle_t;
+#endif
 #define _SFETCH_INVALID_FILE_HANDLE (0)
 typedef void*(*_sfetch_thread_func_t)(void*);
 #elif _SFETCH_PLATFORM_WINDOWS
@@ -1722,25 +1726,46 @@ _SOKOL_PRIVATE _sfetch_item_t* _sfetch_pool_item_lookup(_sfetch_pool_t* pool, ui
 // >>posix
 #if _SFETCH_PLATFORM_POSIX
 _SOKOL_PRIVATE _sfetch_file_handle_t _sfetch_file_open(const _sfetch_path_t* path) {
+#if defined(__ANDROID__)
+    return android_open(path->buf); // elix22 - using my own implementation for Android
+#else   
     return fopen(path->buf, "rb");
+#endif
 }
 
 _SOKOL_PRIVATE void _sfetch_file_close(_sfetch_file_handle_t h) {
+#if defined(__ANDROID__)
+    android_close(h); // elix22 - using my own implementation for Android
+#else
     fclose(h);
+#endif
 }
 
 _SOKOL_PRIVATE bool _sfetch_file_handle_valid(_sfetch_file_handle_t h) {
+#if defined(__ANDROID__)
+    return h != NULL;
+#else
     return h != _SFETCH_INVALID_FILE_HANDLE;
+#endif
 }
 
 _SOKOL_PRIVATE uint32_t _sfetch_file_size(_sfetch_file_handle_t h) {
+#if defined(__ANDROID__)
+    return android_size(h); // elix22 - using my own implementation for Android
+#else
     fseek(h, 0, SEEK_END);
     return (uint32_t) ftell(h);
+#endif
 }
 
 _SOKOL_PRIVATE bool _sfetch_file_read(_sfetch_file_handle_t h, uint32_t offset, uint32_t num_bytes, void* ptr) {
+#if defined(__ANDROID__) // elix22 - using my own implementation for Android
+    android_seek(h, offset, SEEK_SET);
+    return num_bytes == android_read(h, ptr, num_bytes);
+#else
     fseek(h, (long)offset, SEEK_SET);
     return num_bytes == fread(ptr, 1, num_bytes, h);
+#endif
 }
 
 _SOKOL_PRIVATE bool _sfetch_thread_init(_sfetch_thread_t* thread, _sfetch_thread_func_t thread_func, void* thread_arg) {
