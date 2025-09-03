@@ -1,11 +1,46 @@
 ## Updates
 
+### 01-Sep-2025
+
+- sokol_app.h: it's now possible to define custom mouse cursors via two new functions:
+    - `void sapp_bind_mouse_cursor_image(sapp_mouse_cursor cursor, const sapp_image_desc* desc)`
+    - `void sapp_unbind_mouse_cursor_image(sapp_mouse_cursor cursor)`
+
+  For example code see the new sample [cursor-sapp](https://floooh.github.io/sokol-html5/cursor-sapp.html).
+
+  Many thanks to @Seb-degraff for the PR (https://github.com/floooh/sokol/pull/1309) and sample, but also
+  see the merge-branch PR for additional implementation details (https://github.com/floooh/sokol/pull/1321).
+
+- sokol_app.h macos: ...and a followup fix issue on macOS where a custom cursor image isn't properly
+  restored when moving the mouse outside a window and then back in. Again, many thanks to @Seb-degraff
+  for identifying the issue and providing a fix via PR https://github.com/floooh/sokol/pull/1323!
+
+- ...and another sokol_app.h update: `sapp_toggle_fullscreen()` now works on the web
+  (with the usual web platform caveats: the function needs to be called within
+  or 'near' an input event, and the user may leave fullscreen mode at any time,
+  and Safari on iOS doesn't support fullscreen mode at all).
+
+  Many thanks again to @Seb-degraff for kicking this off! Original PR:
+  https://github.com/floooh/sokol/pull/1322, merge branch PR with additional
+  fixes: https://github.com/floooh/sokol/pull/1324
+
+### 29-Aug-2025
+
+- sokol_imgui.h: Fixed a high-dpi font blurriness regression in sokol_imgui.h which
+  was introduced with the new texture handling in Dear ImGui 1.92.0. The
+  fix causes the Dear ImGui font atlas to be rendered at the native display
+  resolution so that no upscaling happens for text (which was the reason for
+  the blurriness).
+
+  Issue: https://github.com/floooh/sokol/issues/1297
+  Fix: https://github.com/floooh/sokol/pull/1320
+
 ### 28-Aug-2025
 
 - sokol_app.h linux: fixed an issue that prevented to lock the mouse early in the
-  sokol-app `init()` callback. 
+  sokol-app `init()` callback.
   PR: https://github.com/floooh/sokol/pull/1319 and issue: https://github.com/floooh/sokol/issues/1318.
-  Many thanks to @Joan-rv for identifying the issue and implementing the fix! 
+  Many thanks to @Joan-rv for identifying the issue and implementing the fix!
 
 ### 23-Aug-2025
 
