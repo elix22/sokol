@@ -874,19 +874,19 @@ _SOKOL_PRIVATE void _sgimgui_igseparator(void) {
 }
 
 _SOKOL_PRIVATE void _sgimgui_igsameline(void) {
-    _SGIMGUI_IMGUI_FUNC(SameLine)();
+    _SGIMGUI_IMGUI_FUNC(SameLine)(0,0);
 }
 
 _SOKOL_PRIVATE void _sgimgui_igpushidint(int int_id) {
     #if defined(__cplusplus)
         ImGui::PushID(int_id);
     #else
-        _SGIMGUI_IMGUI_FUNC(PushIDInt)(int_id);
+        _SGIMGUI_IMGUI_FUNC(PushID_Int)(int_id);
     #endif
 }
 
 _SOKOL_PRIVATE void _sgimgui_igpushid(const char* str_id) {
-    _SGIMGUI_IMGUI_FUNC(PushID)(str_id);
+    _SGIMGUI_IMGUI_FUNC(PushID_Str)(str_id);
 }
 
 _SOKOL_PRIVATE void _sgimgui_igpopid(void) {
@@ -897,7 +897,7 @@ _SOKOL_PRIVATE bool _sgimgui_igselectableex(const char* label, bool selected, Im
     #if defined(__cplusplus)
         return ImGui::Selectable(label, selected, flags, size);
     #else
-        return _SGIMGUI_IMGUI_FUNC(SelectableEx)(label, selected, flags, size);
+        return _SGIMGUI_IMGUI_FUNC(Selectable_Bool)(label, selected, flags, size);
     #endif
 }
 
@@ -906,7 +906,7 @@ _SOKOL_PRIVATE bool _sgimgui_igsmallbutton(const char* label) {
 }
 
 _SOKOL_PRIVATE bool _sgimgui_igbeginchild(const char* str_id, const ImVec2 size, bool border, ImGuiWindowFlags flags) {
-    return _SGIMGUI_IMGUI_FUNC(BeginChild)(str_id, size, border, flags);
+    return _SGIMGUI_IMGUI_FUNC(BeginChild_Str)(str_id, size, border, flags);
 }
 
 _SOKOL_PRIVATE void _sgimgui_igendchild(void) {
@@ -914,23 +914,23 @@ _SOKOL_PRIVATE void _sgimgui_igendchild(void) {
 }
 
 _SOKOL_PRIVATE void _sgimgui_igpushstylecolor(ImGuiCol idx, ImU32 col) {
-    _SGIMGUI_IMGUI_FUNC(PushStyleColor)(idx, col);
+    _SGIMGUI_IMGUI_FUNC(PushStyleColor_U32)(idx, col);
 }
 
 _SOKOL_PRIVATE void _sgimgui_igpopstylecolor(void) {
-    _SGIMGUI_IMGUI_FUNC(PopStyleColor)();
+    _SGIMGUI_IMGUI_FUNC(PopStyleColor)(1); // TBD ELI
 }
 
 _SOKOL_PRIVATE bool _sgimgui_igtreenodestr(const char* str_id, const char* fmt, ...) {
     va_list args;
     va_start(args, fmt);
-    bool ret = _SGIMGUI_IMGUI_FUNC(TreeNodeV)(str_id, fmt, args);
+    bool ret = _SGIMGUI_IMGUI_FUNC(TreeNodeV_Str)(str_id, fmt, args);
     va_end(args);
     return ret;
 }
 
 _SOKOL_PRIVATE bool _sgimgui_igtreenode(const char* label) {
-    return _SGIMGUI_IMGUI_FUNC(TreeNode)(label);
+    return _SGIMGUI_IMGUI_FUNC(TreeNode_Str)(label);
 }
 
 _SOKOL_PRIVATE void _sgimgui_igtreepop(void) {
@@ -960,7 +960,7 @@ _SOKOL_PRIVATE bool _sgimgui_igsliderfloatex(const char* label, float* v, float 
     #if defined(__cplusplus)
         return ImGui::SliderFloat(label, v, v_min, v_max, format, flags);
     #else
-        return _SGIMGUI_IMGUI_FUNC(SliderFloatEx)(label, v, v_min, v_max, format, flags);
+        return _SGIMGUI_IMGUI_FUNC(SliderFloat)(label, v, v_min, v_max, format, flags);
     #endif
 }
 
@@ -977,7 +977,7 @@ _SOKOL_PRIVATE void _sgimgui_igend(void) {
 }
 
 _SOKOL_PRIVATE bool _sgimgui_igbeginmenu(const char* label) {
-    return _SGIMGUI_IMGUI_FUNC(BeginMenu)(label);
+    return _SGIMGUI_IMGUI_FUNC(BeginMenu)(label, true);
 }
 
 _SOKOL_PRIVATE void _sgimgui_igendmenu(void) {
@@ -988,12 +988,12 @@ _SOKOL_PRIVATE bool _sgimgui_igmenuitemboolptr(const char* label, const char* sh
     #if defined(__cplusplus)
         return ImGui::MenuItem(label, shortcut, p_selected, enabled);
     #else
-        return _SGIMGUI_IMGUI_FUNC(MenuItemBoolPtr)(label, shortcut, p_selected, enabled);
+        return _SGIMGUI_IMGUI_FUNC(MenuItem_BoolPtr)(label, shortcut, p_selected, enabled);
     #endif
 }
 
 _SOKOL_PRIVATE bool _sgimgui_igbegintable(const char* str_id, int column, ImGuiTableFlags flags) {
-    return _SGIMGUI_IMGUI_FUNC(BeginTable)(str_id, column, flags);
+    return _SGIMGUI_IMGUI_FUNC(BeginTable)(str_id, column, flags, IMVEC2(0.0f, 0.0f), 0.0f);
 }
 
 _SOKOL_PRIVATE void _sgimgui_igendtable(void) {
@@ -1005,7 +1005,7 @@ _SOKOL_PRIVATE void _sgimgui_igtablesetupscrollfreeze(int cols, int rows) {
 }
 
 _SOKOL_PRIVATE void _sgimgui_igtablesetupcolumn(const char* label, ImGuiTableColumnFlags flags) {
-    _SGIMGUI_IMGUI_FUNC(TableSetupColumn)(label, flags);
+    _SGIMGUI_IMGUI_FUNC(TableSetupColumn)(label, flags, 0, 0);
 }
 
 _SOKOL_PRIVATE void _sgimgui_igtableheadersrow(void) {
@@ -1013,7 +1013,7 @@ _SOKOL_PRIVATE void _sgimgui_igtableheadersrow(void) {
 }
 
 _SOKOL_PRIVATE void _sgimgui_igtablenextrow(void) {
-    _SGIMGUI_IMGUI_FUNC(TableNextRow)();
+    _SGIMGUI_IMGUI_FUNC(TableNextRow)(0, 0);
 }
 
 _SOKOL_PRIVATE bool _sgimgui_igtablesetcolumnindex(int column_n) {
@@ -1031,7 +1031,7 @@ _SOKOL_PRIVATE void _sgimgui_igimage(ImTextureID user_texture_id, const ImVec2 s
         // FIXME: Dear Bindings is currently missing a constructor wrapper for ImTextureRef
         ImTextureRef tex_ref = {0};
         tex_ref._TexID = user_texture_id;
-        _SGIMGUI_IMGUI_FUNC(Image)(tex_ref, size);
+        _SGIMGUI_IMGUI_FUNC(Image)(tex_ref, size,IMVEC2(0,0),IMVEC2(0,0));
     #endif
 }
 
@@ -4636,6 +4636,7 @@ _SOKOL_PRIVATE sgimgui_desc_t _sgimgui_desc_defaults(const sgimgui_desc_t* desc)
 SOKOL_API_IMPL void sgimgui_init(sgimgui_t* ctx, const sgimgui_desc_t* desc) {
     SOKOL_ASSERT(ctx && desc);
     _sgimgui_clear(ctx, sizeof(sgimgui_t));
+
     ctx->init_tag = 0xABCDABCD;
     ctx->desc = _sgimgui_desc_defaults(desc);
     _sgimgui_capture_init(ctx);
@@ -4702,8 +4703,8 @@ SOKOL_API_IMPL void sgimgui_init(sgimgui_t* ctx, const sgimgui_desc_t* desc) {
     hooks.fail_view = _sgimgui_fail_view;
     hooks.push_debug_group = _sgimgui_push_debug_group;
     hooks.pop_debug_group = _sgimgui_pop_debug_group;
+    
     ctx->hooks = sg_install_trace_hooks(&hooks);
-
     /* allocate resource debug-info slots */
     const sg_desc sgdesc = sg_query_desc();
     ctx->buffer_window.num_slots = sgdesc.buffer_pool_size;
