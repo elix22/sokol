@@ -1,5 +1,41 @@
 ## Updates
 
+### 28-Sep-2025
+
+- sokol_app.h d3d11/dxgi: Fixed a frame timing bug which could cause a wrong frame time to be reported
+  on 120Hz displays (and essentially cause the app to appear running at half speed). This was caused by overly
+  cautious code around the DXGI GetFrameStatistics() function which was intended to catch timing
+  discontinuities, but which could get into a mode where such a discontinuity was triggered in each frame.
+
+  Ticket: https://github.com/floooh/sokol/issues/1337
+
+  PR: https://github.com/floooh/sokol/pull/1338
+
+### 23-Sep-2025
+
+- sokol_gfx.h: the `sg_query_frame_stats()` function now returns resource pool
+  information for all resource types (buffers, images, samplers, views, shaders
+  and pipelines):
+    - total number of objects alive
+    - total number of objects in free-queue
+    - number of allocate, deallocate, init and uninit calls in the current frame
+
+  See PR https://github.com/floooh/sokol/pull/1334 and issue https://github.com/floooh/sokol/issues/1332
+  for details!
+
+### 22-Sep-2025
+
+- sokol_gfx.h d3d11: fix a bug in the d3d11 backend which existed since the 'resource-view-update':
+  when a compute pass used ping-ponging by alternating two textures as shader-resource-view binding
+  and unordered-access-view-binding, the D3D11 validation layer would complain that the same resource
+  is still set as input- or output-resource. This has now been fixed rather crudely by first clearing the
+  shader resource bindings before setting the unordered-access-bindings when calling sg_apply_bindings()
+  in a compute pass. IMHO this D3D11 validation layer warning is a false positive though, because at the
+  time of the next draw call, the chicken-egg-situation has been resolved (since at that point, both the
+  UAV and SRV bindings have been set correctly).
+
+  PR: https://github.com/floooh/sokol/pull/1333
+
 ### 15-Sep-2025
 
 - sokol_gfx.h: a minor breaking change which removes a special case for
