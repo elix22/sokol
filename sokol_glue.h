@@ -112,8 +112,6 @@ Webassembly can't return structures by value to the .NET runtime , so we need to
 the C# bind generator will wrap these functions so it will be transparent to the application .
 The application will call the same methods as usual sglue_environment() and sglue_swapchain() , internaly it will use the internal versions.
 */
-SOKOL_GLUE_API_DECL void sglue_environment_internal(sg_environment* env);
-SOKOL_GLUE_API_DECL void sglue_swapchain_internal(sg_swapchain* swapchain);
 
 #ifdef __cplusplus
 } /* extern "C" */
@@ -166,18 +164,6 @@ SOKOL_API_IMPL sg_swapchain sglue_swapchain(void) {
     swapchain.wgpu.depth_stencil_view = sapp_wgpu_get_depth_stencil_view();
     swapchain.gl.framebuffer = sapp_gl_get_framebuffer();
     return swapchain;
-}
-
-
-
-SOKOL_API_IMPL void sglue_environment_internal( sg_environment* env)
-{
-    *(env) = sglue_environment();
-}
-
-SOKOL_API_IMPL void sglue_swapchain_internal(sg_swapchain* swapchain)
-{
-    *swapchain = sglue_swapchain();
 }
 
 #endif /* SOKOL_GLUE_IMPL */
