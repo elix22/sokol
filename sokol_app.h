@@ -2335,6 +2335,7 @@ inline void sapp_run(const sapp_desc& desc) { return sapp_run(&desc); }
     #include <time.h>
     #include <android/native_activity.h>
     #include <android/looper.h>
+    #include <jni.h>
     #include <EGL/egl.h>
     #include <GLES3/gl3.h>
 #elif defined(_SAPP_LINUX)
@@ -9348,6 +9349,99 @@ _SOKOL_PRIVATE void _sapp_android_show_keyboard(bool shown) {
     }
 }
 
+#ifdef SOKOL_ANDROID_KEYBOARD_EXT
+/* ====================================================================================
+   ANDROID SOFT KEYBOARD EXTENSION (sokol-csharp)
+   
+   Enhanced keyboard implementation using JNI for reliable soft keyboard control.
+   
+   Architecture:
+   - Uses JNI to call InputMethodManager for reliable keyboard show/hide
+   - Hidden EditText in Java captures soft keyboard input via TextWatcher
+   - Java forwards characters to native via JNI callbacks below
+   - Tracks characters sent to avoid duplicates from Android IME
+   
+   To enable: Define SOKOL_ANDROID_KEYBOARD_EXT before including sokol_app.h
+   Called from: sapp_show_keyboard() when SOKOL_ANDROID_KEYBOARD_EXT is defined
+   
+   Java Side Requirements:
+   - SokolNativeActivity.java must implement showKeyboard() method
+   - Hidden EditText with TextWatcher to capture IME input
+   - Must call System.loadLibrary("sokol") in static initializer
+   
+   See: docs/ANDROID_KEYBOARD_IMPLEMENTATION.md for complete documentation
+   ==================================================================================== */
+
+_SOKOL_PRIVATE void _sapp_android_show_keyboard_ext(bool shown) {
+    SOKOL_ASSERT(_sapp.valid);
+    
+    ANativeActivity* activity = _sapp.android.activity;
+    if (!activity) {
+        return;
+    }
+    
+    JNIEnv* env = NULL;
+    JavaVM* jvm = activity->vm;
+    
+    // Attach current thread to JVM
+    jint result = (*jvm)->AttachCurrentThread(jvm, &env, NULL);
+    if (result != JNI_OK || !env) {
+        return;
+    }
+    
+    // Get activity class and call showKeyboard method
+    jobject activityObj = activity->clazz;
+    jclass activityClass = (*env)->GetObjectClass(env, activityObj);
+    
+    if (activityClass) {
+        jmethodID showKeyboardMethod = (*env)->GetMethodID(env, activityClass, "showKeyboard", "(Z)V");
+        
+        if (showKeyboardMethod) {
+            (*env)->CallVoidMethod(env, activityObj, showKeyboardMethod, (jboolean)shown);
+            
+            // Update internal state
+            _sapp.onscreen_keyboard_shown = shown;
+            
+            if ((*env)->ExceptionCheck(env)) {
+                (*env)->ExceptionDescribe(env);
+                (*env)->ExceptionClear(env);
+            }
+        }
+        
+        (*env)->DeleteLocalRef(env, activityClass);
+    }
+    
+    (*jvm)->DetachCurrentThread(jvm);
+}
+
+/* JNI callbacks from Java EditText to forward keyboard input */
+JNIEXPORT void JNICALL Java_com_sokol_app_SokolNativeActivity_nativeOnKeyboardChar(JNIEnv* env, jobject obj, jint codepoint) {
+    _SOKOL_UNUSED(env);
+    _SOKOL_UNUSED(obj);
+    if (_sapp_events_enabled()) {
+        _sapp_init_event(SAPP_EVENTTYPE_CHAR);
+        _sapp.event.char_code = (uint32_t)codepoint;
+        _sapp.event.key_repeat = false;
+        _sapp_call_event(&_sapp.event);
+    }
+}
+
+JNIEXPORT void JNICALL Java_com_sokol_app_SokolNativeActivity_nativeOnKeyboardKey(JNIEnv* env, jobject obj, jint keycode, jboolean down) {
+    _SOKOL_UNUSED(env);
+    _SOKOL_UNUSED(obj);
+    if (_sapp_events_enabled()) {
+        // Handle backspace (keycode 67 = KEYCODE_DEL)
+        if (keycode == 67) {
+            sapp_event_type type = down ? SAPP_EVENTTYPE_KEY_DOWN : SAPP_EVENTTYPE_KEY_UP;
+            _sapp_init_event(type);
+            _sapp.event.key_code = SAPP_KEYCODE_BACKSPACE;
+            _sapp.event.key_repeat = false;
+            _sapp_call_event(&_sapp.event);
+        }
+    }
+}
+#endif /* SOKOL_ANDROID_KEYBOARD_EXT */
+
 _SOKOL_PRIVATE void* _sapp_android_loop(void* arg) {
     _SOKOL_UNUSED(arg);
     _SAPP_INFO(ANDROID_LOOP_THREAD_STARTED);
@@ -12634,7 +12728,11 @@ SOKOL_API_IMPL void sapp_show_keyboard(bool show) {
     #if defined(_SAPP_IOS)
     _sapp_ios_show_keyboard(show);
     #elif defined(_SAPP_ANDROID)
-    _sapp_android_show_keyboard(show);
+        #ifdef SOKOL_ANDROID_KEYBOARD_EXT
+        _sapp_android_show_keyboard_ext(show);
+        #else
+        _sapp_android_show_keyboard(show);
+        #endif
     #else
     _SOKOL_UNUSED(show);
     #endif
