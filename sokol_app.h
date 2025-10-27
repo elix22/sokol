@@ -2148,6 +2148,9 @@ inline void sapp_run(const sapp_desc& desc) { return sapp_run(&desc); }
         #if !defined(SOKOL_METAL) && !defined(SOKOL_GLES3)
         #error("sokol_app.h: unknown 3D API selected for iOS, must be SOKOL_METAL or SOKOL_GLES3")
         #endif
+        #if TARGET_OS_TV
+        #define _SAPP_TVOS (1)
+        #endif
     #endif
 #elif defined(__EMSCRIPTEN__)
     /* emscripten (asm.js or wasm) */
@@ -5237,7 +5240,9 @@ _SOKOL_PRIVATE void _sapp_ios_mtl_init(void) {
     */
     _sapp.ios.view.autoResizeDrawable = false;
     _sapp.ios.view.userInteractionEnabled = YES;
+#if !defined(_SAPP_TVOS)
     _sapp.ios.view.multipleTouchEnabled = YES;
+#endif
     _sapp.ios.view_ctrl = [[UIViewController alloc] init];
     _sapp.ios.view_ctrl.modalPresentationStyle = UIModalPresentationFullScreen;
     _sapp.ios.view_ctrl.view = _sapp.ios.view;
@@ -5340,6 +5345,31 @@ _SOKOL_PRIVATE void _sapp_ios_app_event(sapp_event_type type) {
     }
 }
 
+_SOKOL_PRIVATE void _sapp_tvos_press_event(sapp_event_type type, NSSet<UIPress *>* presses) {
+    if (_sapp_events_enabled()) {
+        for (UIPress *press in presses) {
+            sapp_keycode key = SAPP_KEYCODE_INVALID;
+            switch (press.type) {
+                case UIPressTypeUpArrow:    key = SAPP_KEYCODE_UP; break;
+                case UIPressTypeDownArrow:  key = SAPP_KEYCODE_DOWN; break;
+                case UIPressTypeLeftArrow:  key = SAPP_KEYCODE_LEFT; break;
+                case UIPressTypeRightArrow: key = SAPP_KEYCODE_RIGHT; break;
+                case UIPressTypeSelect:     key = SAPP_KEYCODE_ENTER; break;
+                case UIPressTypeMenu:       key = SAPP_KEYCODE_MENU; break;
+                case UIPressTypePlayPause:  key = SAPP_KEYCODE_PAUSE; break;
+                default: break;
+            }
+            if (key != SAPP_KEYCODE_INVALID) {
+                _sapp_init_event(type);
+                _sapp.event.key_code = key;
+                _sapp.event.key_repeat = false;
+                _sapp.event.modifiers = 0;
+                _sapp_call_event(&_sapp.event);
+            }
+        }
+    }
+}
+
 _SOKOL_PRIVATE void _sapp_ios_touch_event(sapp_event_type type, NSSet<UITouch *>* touches, UIEvent* event) {
     if (_sapp_events_enabled()) {
         _sapp_init_event(type);
@@ -5395,6 +5425,7 @@ _SOKOL_PRIVATE void _sapp_ios_show_keyboard(bool shown) {
         _sapp.ios.textfield.delegate = _sapp.ios.textfield_dlg;
         [_sapp.ios.view_ctrl.view addSubview:_sapp.ios.textfield];
 
+#if !defined(_SAPP_TVOS)
         [[NSNotificationCenter defaultCenter] addObserver:_sapp.ios.textfield_dlg
             selector:@selector(keyboardWasShown:)
             name:UIKeyboardDidShowNotification object:nil];
@@ -5404,6 +5435,7 @@ _SOKOL_PRIVATE void _sapp_ios_show_keyboard(bool shown) {
         [[NSNotificationCenter defaultCenter] addObserver:_sapp.ios.textfield_dlg
             selector:@selector(keyboardDidChangeFrame:)
             name:UIKeyboardDidChangeFrameNotification object:nil];
+#endif
     }
     if (shown) {
         // setting the text field as first responder brings up the onscreen keyboard
@@ -5466,6 +5498,7 @@ _SOKOL_PRIVATE void _sapp_ios_show_keyboard(bool shown) {
 - (void)keyboardWasShown:(NSNotification*)notif {
     _sapp.onscreen_keyboard_shown = true;
     /* query the keyboard's size, and modify the content view's size */
+#if !defined(_SAPP_TVOS)
     if (_sapp.desc.ios_keyboard_resizes_canvas) {
         NSDictionary* info = notif.userInfo;
         CGFloat kbd_h = [[info objectForKey:UIKeyboardFrameEndUserInfoKey] CGRectValue].size.height;
@@ -5473,6 +5506,7 @@ _SOKOL_PRIVATE void _sapp_ios_show_keyboard(bool shown) {
         view_frame.size.height -= kbd_h;
         _sapp.ios.view.frame = view_frame;
     }
+#endif
 }
 - (void)keyboardWillBeHidden:(NSNotification*)notif {
     _sapp.onscreen_keyboard_shown = false;
@@ -5482,6 +5516,7 @@ _SOKOL_PRIVATE void _sapp_ios_show_keyboard(bool shown) {
 }
 - (void)keyboardDidChangeFrame:(NSNotification*)notif {
     /* this is for the case when the screen rotation changes while the keyboard is open */
+#if !defined(_SAPP_TVOS)
     if (_sapp.onscreen_keyboard_shown && _sapp.desc.ios_keyboard_resizes_canvas) {
         NSDictionary* info = notif.userInfo;
         CGFloat kbd_h = [[info objectForKey:UIKeyboardFrameEndUserInfoKey] CGRectValue].size.height;
@@ -5489,6 +5524,7 @@ _SOKOL_PRIVATE void _sapp_ios_show_keyboard(bool shown) {
         view_frame.size.height -= kbd_h;
         _sapp.ios.view.frame = view_frame;
     }
+#endif
 }
 - (BOOL)textField:(UITextField*)textField shouldChangeCharactersInRange:(NSRange)range replacementString:(NSString*)string {
     if (_sapp_events_enabled()) {
@@ -5548,6 +5584,17 @@ _SOKOL_PRIVATE void _sapp_ios_show_keyboard(bool shown) {
 }
 - (BOOL)isOpaque {
     return YES;
+}
+- (void)pressesBegan:(NSSet<UIPress *> *)presses withEvent:(UIPressesEvent *)event {
+    _sapp_tvos_press_event(SAPP_EVENTTYPE_KEY_DOWN, presses);
+}
+- (void)pressesChanged:(NSSet<UIPress *> *)presses withEvent:(UIPressesEvent *)event {
+}
+- (void)pressesEnded:(NSSet<UIPress *> *)presses withEvent:(UIPressesEvent *)event {
+    _sapp_tvos_press_event(SAPP_EVENTTYPE_KEY_UP, presses);
+}
+- (void)pressesCancelled:(NSSet<UIPress *> *)presses withEvent:(UIPressesEvent *)event {
+    _sapp_tvos_press_event(SAPP_EVENTTYPE_KEY_UP, presses);
 }
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent*)event {
     _sapp_ios_touch_event(SAPP_EVENTTYPE_TOUCHES_BEGAN, touches, event);

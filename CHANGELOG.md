@@ -1,5 +1,55 @@
 ## Updates
 
+### 24-Oct-2025
+
+- sokol_gfx.h: add a missing validation layer check in sg_begin_pass():
+  when providing a resolve attachment, the associated color attachment must
+  have a sample_count of 1.
+
+  PR: https://github.com/floooh/sokol/pull/1366
+
+- sokol_app.h ios: the iOS backend now suports some tvOS features
+  via PR https://github.com/floooh/sokol/pull/1346, many thanks
+  to @tomasandrle!
+
+### 23-Oct-2025
+
+- sokol_gfx.h webgpu: the viewport rectangle is no longer clipped against
+  the visible area. This was a design wart in an older version of the
+  WebGPU spec which has been relaxed by now.
+
+  PR: https://github.com/floooh/sokol/pull/1362
+
+- sokol_gfx.h gl: fix a somewhat esoteric regression in the GL backend
+  feature detection code when an external GL loader is used which provides
+  a GL version older than 4.6. This regression was introduced in PR
+  https://github.com/floooh/sokol/pull/1347.
+
+  Fix PR: https://github.com/floooh/sokol/pull/1363
+
+### 21-Oct-2025
+
+- sokol_spine.h: merged PR https://github.com/floooh/sokol/pull/1361 which
+  fixes multiply-blend-mode and a validation layer issue when switching
+  between blend modes. Many thanks to @bryanjeal!
+
+### 20-Oct-2025
+
+- sokol_args.h: key-args-strings are no longer escaped (the documentation actually
+  stated this, but the implementation behaved differently)
+
+  PR: https://github.com/floooh/sokol/pull/1355
+  Ticket: https://github.com/floooh/sokol/issues/1353
+
+  Many thanks to @cloudwu for identifying and fixing the issue!
+
+- sokol_audio.h: added a new backend for the PS Vita via PR https://github.com/floooh/sokol/pull/1358
+  Please note that I cannot maintain the backend or help with any issues, and
+  normally I wouldn't merge a PR under such circumstances, but since it is very
+  little and straightforward code an exception is justified I guess :)
+
+  Many thanks to @CrackedPixel for the PR!
+
 ### 10-Oct-2025
 
 sokol_gfx.h gl: fix breakage in the GL backend when `SOKOL_EXTERNAL_GL_LOADER`
