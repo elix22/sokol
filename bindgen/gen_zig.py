@@ -24,6 +24,7 @@ module_names = {
     'sglue_':   'glue',
     'sfetch_':  'fetch',
     'simgui_':  'imgui',
+    'sgimgui_': 'sgimgui',
 }
 
 c_source_paths = {
@@ -38,13 +39,12 @@ c_source_paths = {
     'sglue_':   'sokol-zig/src/sokol/c/sokol_glue.c',
     'sfetch_':  'sokol-zig/src/sokol/c/sokol_fetch.c',
     'simgui_':  'sokol-zig/src/sokol/c/sokol_imgui.c',
+    'sgimgui_': 'sokol-zig/src/sokol/c/sokol_gfx_imgui.c',
 }
 
 ignores = [
     'sdtx_printf',
     'sdtx_vprintf',
-    'sg_install_trace_hooks',
-    'sg_trace_hooks',
 ]
 
 # functions that need to be exposed as 'raw' C callbacks without a Zig wrapper function

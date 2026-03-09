@@ -1,10 +1,358 @@
 ## Updates
 
+### 03-Mar-2026
+
+- sokol_app.h macos+metal: Merged PR https://github.com/floooh/sokol/pull/1453,
+  this is a followup to the recent removal of MTKView. In specific situations
+  on macOS 14, occluding or minimizing the app window would crash in
+  the `CADisplayLink.invalidate` method (not reproducible in macOS 26). The
+  workaround is to pause/unpause the CADisplayLink instead of invalidating
+  and creating the object.
+
+  For more details also see the issue: https://github.com/floooh/sokol/issues/1448
+
+  Many thanks to @rizerco!
+
+### 23-Feb-2026
+
+- sokol_app.h ios+metal: Remove MTKView from the iOS+Metal backend and
+  migrate to UIScene lifecycle events.
+  - Implement the new 'UIScene lifecycle' which fixes a deprecation warning
+    at startup that this will be required with the next major iOS update. This
+    change essentially replaces most application delegate callbacks with
+    scene delegate callbacks. This change requires to bump the minimal
+    supported iOS version to 15 (released 2021)
+  - Replace MTKView with CAMetalLayer and CADisplayLink, the one important
+    difference to the macOS backend is that the frame callback isn't called
+    when the application is in the background (you can check for the
+    events `SAPP_EVENTTYPE_SUSPENDED` and `SAPP_EVENTTYPE_RESUMED` if you need
+    to handle this situation). In your build scripts, no longer link with
+    MetalKit, instead link with QuartzCore.
+  - Note that the changes have only been tested in the simulator, I currently
+    don't own any recent physical iOS devices.
+
+  PR: https://github.com/floooh/sokol/pull/1447
+
+### 20-Feb-2026
+
+- sokol_app.h macos+metal: The swapchain code has been rewritten to replace
+  MetalKit's MTKView with `CAMetalLayer` and `CADisplayLink`. Dropping `MTKView`
+  was planned for a long time because of its 'brittleness': updating macOS
+  versions would sometimes come with surprising swapchain behaviour changes, which
+  hopefully are easier to manage in the future when 'cutting the middleman' by
+  kicking out MTKView. This also means that on macOS you no longer need to link
+  with MetalKit.
+
+  The one big downside of the update is that the min-spec for sokol_app.h
+  had to be bumped to macOS 14 (Sonoma) - this is when CADisplayLink was introduced.
+  This might be be a bit too soon (Sonoma was released in September 2023).
+  If this turns out to be a major problem the best solution
+  would be to bring back the MTKView code via a compile-time define (instead of
+  switching to the older CVDisplayLink alternative which seems to be
+  mostly deprecated and generally more hassle to work with than CADisplayLink).
+
+  The upside is that CADisplayLink has the most stable presentation timestamp
+  I've seen anywhere yet: Basically, subtracting the `CADisplayLink.timestamp`
+  property of two consecutive frames gives a rockstable frame duration without
+  *any* timing jitter - finally somebody getting it right ;) This means that for the
+  macos+metal backend sokol_app.h doesn't need to use the complicated jitter-filtering
+  which needs a second or so to adjust to framerate changes in exchange
+  for a jitter-free frame duration.  Instead the frame duration is directly
+  taken from `CADisplayLink` without any filtering.
+
+  The other 'interesting' change in the new update is how frames are triggered
+  for minified and obscured windows: `CADisplayLink` completely stops when the
+  window is minified while `MTKView` continues calling the frame callback.
+  To mimick the MTKView behaviour, I added a 'fallback timer' which kicks in
+  while the window is in minified or obscured state and which triggers the
+  frame callback at a fixed 60Hz frequency, e.g.:
+
+  - window became minified or obscured:
+    - stop the CADisplayLink
+    - start a 'fallback' 60Hz NSTimer
+  - window became deminified or visible:
+    - stop the fallback NSTimer
+    - start the CADisplayLink
+
+  This whole 'problem complex' of what to do when a window is minified or
+  completely obscured will need proper fixing in a followup update. Basically,
+  an app should be able to detect when the 'frame workload' can be reduced
+  because the window is fully obscured or minified (although there needs to be
+  some wiggle room for vastly differing platform behaviour).
+  For more details see this planning ticket: https://github.com/floooh/sokol/issues/1446.
+
+  The actual `CAMetalLayer`+`CADisplayLink` change is in this PR:
+
+  https://github.com/floooh/sokol/pull/1444
+
+  PS: the same change hasn't been implemented for iOS yet, e.g. the sokol_app.h
+  iOS backend still uses MTKView. This will be fixed in a non-too-distant
+  followup update.
+
+### 12-Feb-2026
+
+- sokol_app.h: 'harmonized' mouse wheel scaling with GLFW. This only affects
+  Windows and Emscripten. Basically, on Windows and Emscripten mouse wheel
+  events were scaled to be 4x 'faster' than intended (e.g. a mouse wheel
+  'click' was 4 units instead of 1). On macOS and Linux the scaling was already
+  correct.
+
+  PR: https://github.com/floooh/sokol/pull/1442
+
+### 08-Feb-2026
+
+- sokol_app.h ios/mtl: Fix a spurious assert when applying scissor rect after
+  rotating the device and which might lead to a drawable-size mismatch. This
+  doesn't appear to be 100% watertight but works much better than
+  before. The assert might be the result of a behaviour change in MTKView
+  between iOS versions (which tbh wouldn't be the first time this happened).
+  A 'perfect' solution will need to wait until the next round of iOS/macOS
+  window system glue updates which will finally get rid of MTKView and instead
+  use `CAMetalLayer` and `CADisplayLink` directly. Until then it's definitely
+  recommended to disable display rotation for your application via the Info.plist
+  file. Many thanks to @ArMuSebastian for writing the issue and providing
+  a simple reproducer.
+
+  Issue: https://github.com/floooh/sokol/issues/1437
+  PR: https://github.com/floooh/sokol/pull/1438
+
+### 03-Feb-2026
+
+- sokol_gfx.h vulkan: another round of small fixes and code cleanups in the
+  vulkan backend:
+  - execution wouldn't properly fail when no suitable Vulkan device could be found
+  - minor code cleanup around creating and destroying swapchain image-views
+  - on Windows, the `SAPP_EVENTTYPE_RESIZED` event is now fired in the same place
+    as on Linux, right after recreating swapchain resources
+  - on Windows, the internal framebuffer width/height is now updated only in
+    a single place (right after recreating swapchain resources)
+  - frame time measurement was actually broken on the Windows+Vulkan combination
+    and has been fixed
+
+  PR: https://github.com/floooh/sokol/pull/1433
+
+### 01-Feb-2026
+
+- sokol_gfx.h vulkan: the frame-sync-related validation layer errors on Windows
+  have been fixed (at least on the configs I can currently test: RTX5070 and Intel
+  Meteor Lake GPU). Unfortunately that doesn't guarantee that all other configs
+  are validation-error-clean. There are still a couple of issues on Windows to
+  deal with (especially a very high input-to-display lag compared to the
+  D3D11/DXGI backend, and moving/resizing the application window is stuttery on
+  NVIDIA (this is caused by the render-during-window-move/resize code waiting
+  for vsync). ~~The next step will be to port the swapchain code to  `VK_KHR_swpachain_maintenance1`
+  (which probably would have been a good idea right from the start).~~ nvm, I didn't
+  realize how badly supported `VK_[KHR|EXT]_swapchain_maintenenace1` is actually
+  supported when I wrote that heh.
+
+  Also please keep in mind that the Vulkan backend is still deep in
+  'highly experimental state'.
+
+  PR: https://github.com/floooh/sokol/pull/1430
+
+### 26-Jan-2026
+
+- sokol_gfx.h: added support for dual-source-blending behind a new
+  feature flag `sg_query_features().dual_source_blending`:
+  - GL: available since 3.3
+  - GLES3/WebGL2: generally not available
+  - D3D11/Metal: generally available
+  - WebGPU: dynamic availability via `WGPUFeatureName_DualSourceBlending`
+  - experimental Vulkan backend: currently required (initialization will
+    fail when the `dualSrcBlend` feature is not available)
+
+  Trying to use dual-source blend-factors when `sg_features.dual_source_blending`
+  is false will result in a validation layer error in debug mode and 'undefined
+  behaviour' in release mode.
+
+  Note that currently there is no sokol-sample which tests/demonstrates
+  dual-source-blending. The plan here is to replace the `blend-sapp` and
+  `blend-op-sapp` samples with a new sample which has a Dear ImGui UI to control
+  all blending features.
+
+  Many thanks to @Tremus for the original PR to kick things off!
+
+  Original PR: https://github.com/floooh/sokol/pull/1423
+  Final PR (making the feature dynamic): https://github.com/floooh/sokol/pull/1426
+
+### 24-Jan-2026
+
+- sokol_app.h/sokol_gfx.h vk: object debug labels are now working in the experimental
+  Vulkan backend (via `VK_EXT_debug_utils`). Debug labels are only set in debug mode
+  (e.g. `SOKOL_DEBUG` is defined). PR: https://github.com/floooh/sokol/pull/1422
+- sokol_gfx.h vk: Fix catastrophic performance of uniform updates on the Intel Vulkan
+  driver for Windows. This was caused by letting the descriptor-buffer-extension
+  function `vkGetDescriptorEXT()` write the descriptor data directly into the descriptor
+  buffer which completely destroys performance on the Intel Windows driver (interestingly
+  this is fast on the same machine in Linux). The fix is now to write the descriptor data
+  into an intermediate sysmem chunk and then do a single memcpy() of the entire descriptor
+  set into the descriptor buffer. As a bonus there are now also no more redundant `vkGetDescriptorEXT()`
+  calls when multiple uniform blocks are used in a shader. Overall performance in the `drawcallperf-sapp`
+  sample is still behind GL and D3D11, but at least it's roughly in the same ballpark now.
+  PR: https://github.com/floooh/sokol/pull/1424
+
+### 19-Jan-2026
+
+- sokol_gfx.h gl: merged PR https://github.com/floooh/sokol/pull/1414, this enables
+  per-multiple-render-target color write masks on GLES3.2. Many thanks to
+  @luigi-rosso for the PR!
+
+- sokol_app.h: Added Windows support for the experimental Vulkan backend
+  (still only tested on an Intel Meteor Lake integrated GPU). The other good news
+  is that RenderDoc works with the Vulkan backend on Windows (it didn't on
+  Linux).
+
+  PR: https://github.com/floooh/sokol/pull/1417
+
+### 18-Jan-2026
+
+Happy New Year!
+
+- sokol_gfx.h gl: merged PR https://github.com/floooh/sokol/pull/1412 which fixes
+  a GL error on some drivers when switching between `GL_DEPTH_ATTACHMENT` and
+  `GL_DEPTH_STENCIL_ATTACHMENT`. Many thanks to @luigi-rosso for identifying
+  the issue and providing a fix!
+
+### 13-Dec-2025
+
+A WebGPU backend code cleanup round:
+
+- sokol_app.h:
+    - on macOS, fixed a WebGPU validation layer warning when the app didn't
+      set an explicit window size (so that the default size is picked). In that
+      case the WebGPU swapchain setup code used a width and height of zero to
+      initialize the swapchain (Windows and Linux wasn't affected from this
+      chicken-egg problem)
+    - moved all struct initializations into a macro to enforce zero-initialization
+      without a separate memset call (also outside the WebGPU backend)
+- sokol_gfx.h:
+    - similar to sokol_app.h, moved all struct initialization into a macro
+      (also outside the WebGPU backend)
+    - setting the uniform block bind group is now delayed into the draw/dispatch
+      functions, this avoids multiple redundant setBindGroup calls when a
+      shader uses multiple uniform blocks
+    - the special 'empty bindgroup' object has been removed and in places where
+      the empty bindgroup was set, the WebGPU SetBindGroup function is now
+      called with a nullptr (clearing bindgroups with a nullptr didn't work
+      in the past, but works correctly now)
+    - unused vertex buffer slots are now explicitly cleared by setting a nullptr
+    - a redundant texture arg in the internal function `_sg_wgpu_copy_image_data`
+      has been removed
+    - a special case for cube maps has been removed in `_sg_wgpu_create_image`
+    - remove two redundant SetBindGroup calls at the end of `_sg_wgpu_apply_pipeline()`,
+      this was required in the past when the shader didn't have any bindings
+      but this seems to have been relaxed
+- sokol-shdc: bindslot allocation for WGSL has been updated to work the
+  same as for Vulkan-SPIRV output, this makes the WGSL bindings more compact
+  but isn't a breaking change
+- utility headers: all embeded WGSL shaders have been updated (in some cases
+  the shader size was significantly reduced because of a more recent Tint
+  version in sokol-shdc)
+
+PR: https://github.com/floooh/sokol/pull/1397
+Ticket: https://github.com/floooh/sokol/issues/1367
+
+### 06-Dec-2025
+
+- sokol_gfx.h: a couple of small fixes in the GL backend:
+  - https://github.com/floooh/sokol/pull/1396
+  - https://github.com/floooh/sokol/commit/c2cc1858a1896e2b4be9db22cc38f720e4f460e6
+
+  Many thanks to @Julianiolo for catching those!
+
+### 05-Dec-2025
+
+- sokol_gfx_imgui.h: a breaking update to harmonize the API with the other sokol
+  headers, and make the sokol_gfx_imgui.h header more language-binding-friendly:
+  - all 'internal state' structs have been moved from the public API into the
+    private implementation block
+  - the 'context arg' has been removed from the public API functions
+  - `sgimgui_init()` has been renamed to `sgimgui_setup()`
+  - `sgimgui_discard()` has been renamed to `sgimgui_shutdown()`
+  - optional functions to draw inidividual menu items have been added
+    (as alternative to the all-in-one `sgimgui_draw_menu()`)
+  - the optional window drawing functions now take a `title` argument
+
+  PR: https://github.com/floooh/sokol/pull/1394
+
+- sokol_imgui.h: added an error-level log message when the internal
+  vertex- or index-buffer would overflow
+  (see https://github.com/floooh/sokol/issues/1387)
+
+### 04-Dev-2025
+
+- sokol_gfx.h: a minor breaking change for querying runtime statistics: the function
+  `sg_frame_stats sg_query_frame_stats(void)` has been replaced with `sg_stats sg_query_stats(void)`
+  (and a handful related functions renamed from 'frame_stats' to 'stats').
+  The new function `sg_query_stats()` returns additional information not just related to
+  the previous frame: it also reports the current 'running counts' for the current frame
+  (careful: those depend on *where* in a frame the function is called), and the stats-values
+  which are not frame related have been moved into a separate nested struct `.total`.
+  The totals are: the number of currently alive and free objects,
+  and the total number alloc, free, init and uninit have been called for each
+  resource type.
+
+  Related issue: https://github.com/floooh/sokol/issues/1388
+  ...and PR: https://github.com/floooh/sokol/pull/1393
+
+### 02-Dec-2025
+
+- sokol_gfx.h gl: unused framebuffer attachment slots are now explicitly cleared
+  in `sg_begin_pass()`. See PR https://github.com/floooh/sokol/pull/1390 for details! Many thanks to @etherbound-dev
+  for catching and fixing the issue!
+- sokol_app.h: some minor breaking changes in the public API (most code won't be affected):
+  - the platform/backend specific config items in `sapp_desc` have been moved
+    into nested structs to allow a more consistent designated-init coding style
+  - a new enum `sapp_pixel_format` has been added and the functions `sapp_color_format()` and
+    `sapp_depth_format()` now return `sapp_pixel_format` instead of an `int`. Note
+    that the `sapp_pixel_format` values are no longer directly convertible to `sg_pixel_format`
+    values, you need some mapping code between the two enum types
+  - a new function `sapp_get_environment()` has been added which returns a new struct
+    `sapp_environment()`, this conceptually plugs into the sokol-gfx struct `sg_environement`
+    but requires mapping code to translate `sapp_environment` into `sg_environment` (an example
+    of such mapping code is for instance in sokol_glue.h)
+  - likewise, a new function `sapp_get_swapchain()` has been added which returns a new
+    struct `sapp_swapchain`, which conceptually plugs into the sokol-gfx struct `sg_swapchain`
+  - a ton of platform/backend specific functions have been removed which returned type-erased
+    pointers to various 3D backend objects, those pointers have moved into the new
+    structs `sapp_environemnt` and `sapp_swapchain`
+- sokol_gfx.h: a similar minor breaking change in `sg_desc` as was implemented in `sapp_desc`:
+  the individual backend-specific config items have been moved into nested structs
+  to allow a more consistent designated-init style
+- An *experimental Vulkan backend* has been added to sokol_app.h and sokol_gfx.h,
+  [please read this blog post for an overview](https://floooh.github.io/2025/12/01/sokol-vulkan-backend-1.html).
+  Currently the backend only supports Linux and has only been tested on an Intel
+  Meteor Lake embedded GPU. If you want to test this with the sokol-samples:
+  - make sure the following packages are installed (this is for Ubuntu + apt):
+    - libvulkan-dev
+    - vulkan-tools
+    - vulkan-validationlayers
+  - mkdir workspace && cd workspace
+  - clone https://github.com/floooh/sokol-samples
+  - from within sokol-samples:
+    - ./fips set config sapp-vk-linux-ninja-debug
+    - ./fips build
+    - ./fips run cube-sapp-ui
+
+### 13-Nov-2025
+
+- sokol_audio.h gained a new backend for the Nintendo 3DS.
+  See PR https://github.com/floooh/sokol/pull/1372 for details.
+  Many thanks again to @CrackedPixel!
+
+### 27-Oct-2025
+
+- The repository for the D bindings has moved from https://github.com/kassane/sokol-d
+  to https://github.com/floooh/sokol-d, see https://github.com/floooh/sokol-d/discussions/36#discussioncomment-14790873
+  for details, this also means that the level of support for the D bindings
+  will need to be reduced unfortunately (especially when it comes to Dub packaging),
+  the automatic bindings generation will continue to work though.
+
 ### 24-Oct-2025
 
 - sokol_gfx.h: add a missing validation layer check in sg_begin_pass():
   when providing a resolve attachment, the associated color attachment must
-  have a sample_count of 1.
+  have a sample_count > 1.
 
   PR: https://github.com/floooh/sokol/pull/1366
 
