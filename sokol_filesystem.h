@@ -464,33 +464,72 @@ SOKOL_API_IMPL void sfs_set_android_internal_path(const char* path) {
 }
 
 SOKOL_API_IMPL char* sfs_get_base_path(void) {
-    DWORD buflen = 256;
-    WCHAR* path = NULL;
     char* result = NULL;
-    DWORD len = 0;
 
-    while (1) {
-        WCHAR* tmp = (WCHAR*)realloc(path, buflen * sizeof(WCHAR));
-        if (!tmp) { free(path); _sfs_set_error("out of memory"); return NULL; }
-        path = tmp;
-        len = GetModuleFileNameW(NULL, path, buflen);
-        if (len < buflen - 1) break;
-        buflen *= 2;
+    /* Strategy 1: use the directory that contains sokol.dll itself.
+       When the app runs under the dotnet managed host (dotnet.exe),
+       GetModuleFileNameW(NULL) returns dotnet.exe — not the app directory.
+       Using GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS gives us the module that
+       contains sfs_get_base_path, which is sokol.dll, and sokol.dll always
+       lives right next to the managed app's DLLs and its assets. */
+    {
+        HMODULE self_module = NULL;
+        if (GetModuleHandleExW(
+                GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                (LPCWSTR)(const void*)&sfs_get_base_path,
+                &self_module) && self_module)
+        {
+            DWORD buflen = 256;
+            WCHAR* path = NULL;
+            DWORD len = 0;
+            while (1) {
+                WCHAR* tmp = (WCHAR*)realloc(path, buflen * sizeof(WCHAR));
+                if (!tmp) { free(path); break; }
+                path = tmp;
+                SetLastError(0);
+                len = GetModuleFileNameW(self_module, path, buflen);
+                if (len < buflen - 1) break;
+                buflen *= 2;
+            }
+            if (path && len > 0) {
+                /* chop off filename, keep trailing backslash */
+                for (int i = (int)len - 1; i > 0; i--) {
+                    if (path[i] == L'\\') { path[i + 1] = L'\0'; break; }
+                }
+                result = _sfs_wide_to_utf8(path);
+            }
+            free(path);
+        }
     }
 
-    if (len == 0) {
+    /* Strategy 2 (fallback): use the process executable path.
+       This is correct for NativeAOT published executables where the app
+       itself is the process, but wrong when hosted inside dotnet.exe. */
+    if (!result) {
+        DWORD buflen = 256;
+        WCHAR* path = NULL;
+        DWORD len = 0;
+        while (1) {
+            WCHAR* tmp = (WCHAR*)realloc(path, buflen * sizeof(WCHAR));
+            if (!tmp) { free(path); _sfs_set_error("out of memory"); return NULL; }
+            path = tmp;
+            len = GetModuleFileNameW(NULL, path, buflen);
+            if (len < buflen - 1) break;
+            buflen *= 2;
+        }
+        if (len == 0) {
+            free(path);
+            _sfs_set_error("GetModuleFileNameW failed");
+            return NULL;
+        }
+        /* chop off filename, keep trailing backslash */
+        for (int i = (int)len - 1; i > 0; i--) {
+            if (path[i] == L'\\') { path[i + 1] = L'\0'; break; }
+        }
+        result = _sfs_wide_to_utf8(path);
         free(path);
-        _sfs_set_error("GetModuleFileNameW failed");
-        return NULL;
     }
 
-    /* chop off filename, keep trailing backslash */
-    for (int i = (int)len - 1; i > 0; i--) {
-        if (path[i] == L'\\') { path[i + 1] = L'\0'; break; }
-    }
-
-    result = _sfs_wide_to_utf8(path);
-    free(path);
     return result;
 }
 
