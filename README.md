@@ -6,7 +6,7 @@
 
 # Sokol
 
-[**See what's new**](https://github.com/floooh/sokol/blob/master/CHANGELOG.md) (**20-Feb-2026**: sokol-app ios+macos+metal: replace MTKView with CAMetalLayer+CADisplayLink)
+[**See what's new**](https://github.com/floooh/sokol/blob/master/CHANGELOG.md) (**02-Apr-2026**: frame timing fixes in sokol_app.h)
 
 [![Build](/../../actions/workflows/main.yml/badge.svg)](/../../actions/workflows/main.yml) [![Bindings](/../../actions/workflows/gen_bindings.yml/badge.svg)](/../../actions/workflows/gen_bindings.yml) [![build](https://github.com/floooh/sokol-zig/actions/workflows/main.yml/badge.svg)](https://github.com/floooh/sokol-zig/actions/workflows/main.yml) [![build](https://github.com/floooh/sokol-nim/actions/workflows/main.yml/badge.svg)](https://github.com/floooh/sokol-nim/actions/workflows/main.yml) [![Odin](https://github.com/floooh/sokol-odin/actions/workflows/main.yml/badge.svg)](https://github.com/floooh/sokol-odin/actions/workflows/main.yml)[![Rust](https://github.com/floooh/sokol-rust/actions/workflows/main.yml/badge.svg)](https://github.com/floooh/sokol-rust/actions/workflows/main.yml)[![Dlang](https://github.com/floooh/sokol-d/actions/workflows/build.yml/badge.svg)](https://github.com/floooh/sokol-d/actions/workflows/build.yml)[![C3](https://github.com/floooh/sokol-c3/actions/workflows/build.yml/badge.svg)](https://github.com/floooh/sokol-c3/actions/workflows/build.yml)
 
@@ -20,6 +20,8 @@
 Aras Pranckevičius, PC/web port via sokol ([source](https://github.com/aras-p/demo-pd-cranktheworld)).
 
 - [sokol_gp.h](https://github.com/edubart/sokol_gp) a 2D shape drawing library on top of sokol_gfx.h
+
+- [NanoVG backend](https://github.com/vinnyhorgan/nanovg) a sokol_gfx backend for the amazing [NanoVG](https://github.com/memononen/nanovg) library.
 
 - [Dear ImGui starterkit](https://github.com/floooh/cimgui-sokol-starterkit) a self-contained starterkit for writing Dear ImGui apps in C.
 
