@@ -6701,6 +6701,9 @@ _SOKOL_PRIVATE void _sapp_ios_show_keyboard(bool shown) {
 - (void)sceneWillResignActive:(UIScene*)scene {
     if (!_sapp.ios.suspended) {
         _sapp.ios.suspended = true;
+        #if defined(SOKOL_METAL)
+        _sapp.ios.mtl.display_link.paused = YES;
+        #endif
         _sapp_ios_app_event(SAPP_EVENTTYPE_SUSPENDED);
     }
 }
@@ -6708,6 +6711,9 @@ _SOKOL_PRIVATE void _sapp_ios_show_keyboard(bool shown) {
 - (void)sceneDidBecomeActive:(UIScene*)scene {
     if (_sapp.ios.suspended) {
         _sapp.ios.suspended = false;
+        #if defined(SOKOL_METAL)
+        _sapp.ios.mtl.display_link.paused = NO;
+        #endif
         _sapp_ios_app_event(SAPP_EVENTTYPE_RESUMED);
     }
 }
