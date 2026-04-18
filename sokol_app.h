@@ -10653,10 +10653,18 @@ _SOKOL_PRIVATE void _sapp_android_show_keyboard_ext(bool shown) {
     
     JNIEnv* env = NULL;
     JavaVM* jvm = activity->vm;
-    
-    // Attach current thread to JVM
-    jint result = (*jvm)->AttachCurrentThread(jvm, &env, NULL);
-    if (result != JNI_OK || !env) {
+
+    // Check if the thread is already attached (e.g. Java main/UI thread calling back into native).
+    // Only attach — and later detach — if we are not yet attached.
+    bool thread_attached_here = false;
+    jint result = (*jvm)->GetEnv(jvm, (void**)&env, JNI_VERSION_1_6);
+    if (result == JNI_EDETACHED) {
+        result = (*jvm)->AttachCurrentThread(jvm, &env, NULL);
+        if (result != JNI_OK || !env) {
+            return;
+        }
+        thread_attached_here = true;
+    } else if (result != JNI_OK || !env) {
         return;
     }
     
@@ -10681,8 +10689,11 @@ _SOKOL_PRIVATE void _sapp_android_show_keyboard_ext(bool shown) {
         
         (*env)->DeleteLocalRef(env, activityClass);
     }
-    
-    (*jvm)->DetachCurrentThread(jvm);
+
+    // Only detach if we attached the thread ourselves.
+    if (thread_attached_here) {
+        (*jvm)->DetachCurrentThread(jvm);
+    }
 }
 
 /* JNI callbacks from Java EditText to forward keyboard input */
