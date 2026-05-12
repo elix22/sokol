@@ -1160,7 +1160,7 @@ SOKOL_API_IMPL sfs_file_t* sfs_open_file(const char* path, sfs_open_mode_t mode)
 SOKOL_API_IMPL void sfs_set_android_internal_path(const char* path) { (void)path; }
 
 SOKOL_API_IMPL char* sfs_get_base_path(void) {
-    return strdup("/");
+    return strdup("./");
 }
 
 SOKOL_API_IMPL char* sfs_get_pref_path(const char* org, const char* app) {
