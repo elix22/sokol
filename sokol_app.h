@@ -10408,8 +10408,28 @@ _SOKOL_PRIVATE void _sapp_android_cleanup(void) {
 _SOKOL_PRIVATE void _sapp_android_shutdown(void) {
     /* try to cleanup while we still have a surface and can call cleanup_cb() */
     _sapp_android_cleanup();
-    /* request exit */
-    ANativeActivity_finish(_sapp.android.activity);
+    /* Use finishAndRemoveTask() so the app is removed from the recents list.
+       Falls back to ANativeActivity_finish() if JNI lookup fails. */
+    JavaVM* vm = _sapp.android.activity->vm;
+    JNIEnv* env = NULL;
+    (*vm)->AttachCurrentThread(vm, &env, NULL);
+    if (env) {
+        jclass cls = (*env)->GetObjectClass(env, _sapp.android.activity->clazz);
+        jmethodID mid = (*env)->GetMethodID(env, cls, "finishAndRemoveTask", "()V");
+        if (mid) {
+            (*env)->CallVoidMethod(env, _sapp.android.activity->clazz, mid);
+            /* Clear any pending Java exception so DetachCurrentThread is safe. */
+            if ((*env)->ExceptionCheck(env)) {
+                (*env)->ExceptionClear(env);
+                ANativeActivity_finish(_sapp.android.activity);
+            }
+        } else {
+            ANativeActivity_finish(_sapp.android.activity);
+        }
+        (*vm)->DetachCurrentThread(vm);
+    } else {
+        ANativeActivity_finish(_sapp.android.activity);
+    }
 }
 
 _SOKOL_PRIVATE void _sapp_android_frame(void) {
@@ -10419,6 +10439,12 @@ _SOKOL_PRIVATE void _sapp_android_frame(void) {
     _sapp_timing_update(&_sapp.timing, 0.0);
     _sapp_android_update_dimensions(_sapp.android.current.window, false);
     _sapp_frame();
+    // If sapp_quit() was called during the frame, shut down cleanly before
+    // touching EGL again — eglSwapBuffers on a destroyed surface would crash.
+    if (_sapp.quit_ordered) {
+        _sapp_android_shutdown();
+        return;
+    }
     eglSwapBuffers(_sapp.android.display, _sapp.android.surface);
 }
 
