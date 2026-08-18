@@ -1086,9 +1086,22 @@ SOKOL_API_IMPL sfs_result_t sfs_get_path_info(const char* path, sfs_path_info_t*
         }
         AAssetDir* dir = AAssetManager_openDir(mgr, apath);
         if (dir) {
-            out_info->type = SFS_PATHTYPE_DIRECTORY;
+            /* A non-NULL handle is NOT evidence the directory is there: AAssetManager_openDir()
+               happily returns a valid (empty) handle for a directory that does not exist. Without
+               the emptiness check below, every path that stat() cannot see resolves as a directory,
+               so sfs_path_exists()/sfs_is_directory() answer true for ANY path on Android.
+               Only a directory holding at least one entry is treated as real.
+               Caveat: AAssetDir_getNextFileName() enumerates files only — the NDK asset API cannot
+               list subdirectories — so an asset directory whose children are all directories now
+               reports NOT_FOUND. That is the safe direction to be wrong in; the alternative was
+               that every nonsense path reported as an existing directory. */
+            const char* first = AAssetDir_getNextFileName(dir);
+            bool has_entry = (first != NULL);
             AAssetDir_close(dir);
-            return SFS_RESULT_OK;
+            if (has_entry) {
+                out_info->type = SFS_PATHTYPE_DIRECTORY;
+                return SFS_RESULT_OK;
+            }
         }
     }
     return SFS_RESULT_NOT_FOUND;
