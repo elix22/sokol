@@ -10934,8 +10934,16 @@ _SOKOL_PRIVATE void _sapp_android_on_destroy(ANativeActivity* activity) {
 
     _SAPP_INFO(ANDROID_NATIVE_ACTIVITY_DONE);
 
-    /* this is a bit naughty, but causes a clean restart of the app (static globals are reset) */
-    exit(0);
+    /* This is a bit naughty, but causes a clean restart of the app (static globals are reset).
+       It must be _exit() and NOT exit(): onDestroy runs on the Java main thread while the whole
+       Android framework is still live (RenderThread, hwuiTask0/1, binder threads), so running
+       atexit()/static destructors tears down libraries those threads are still calling into.
+       Seen on Android 16: libhwui registers its CommonPool singleton with __cxa_atexit, so exit()
+       destroys that pool's std::mutex while its workers still post to it and bionic aborts with
+       "FORTIFY: pthread_mutex_lock called on a destroyed mutex" -> SIGABRT. _exit() skips the
+       destructors and ends all threads at once; the process dies either way (Android's
+       lowmemorykiller already SIGKILLs it here as often as not), so nothing is lost. */
+    _exit(0);
 }
 
 JNIEXPORT
