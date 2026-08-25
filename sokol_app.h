@@ -10395,11 +10395,14 @@ _SOKOL_PRIVATE void _sapp_android_update_dimensions(ANativeWindow* window, bool 
 }
 
 _SOKOL_PRIVATE void _sapp_android_cleanup(void) {
-    if (_sapp.android.surface != EGL_NO_SURFACE) {
-        /* egl context is bound, cleanup gracefully */
-        if (_sapp.init_called && !_sapp.cleanup_called) {
-            _sapp_call_cleanup();
+    if (_sapp.init_called && !_sapp.cleanup_called) {
+        /* the window surface is already gone when the app is swiped out of the recents list
+           (onNativeWindowDestroyed runs before onDestroy), but cleanup_cb must still run; the
+           egl context outlives the surface, so rebind it surfaceless for sg_shutdown()'s gl calls */
+        if (_sapp.android.surface == EGL_NO_SURFACE) {
+            eglMakeCurrent(_sapp.android.display, EGL_NO_SURFACE, EGL_NO_SURFACE, _sapp.android.context);
         }
+        _sapp_call_cleanup();
     }
     /* always try to cleanup by destroying egl context */
     _sapp_android_cleanup_egl();
