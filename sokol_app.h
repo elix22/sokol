@@ -10282,6 +10282,14 @@ _SOKOL_PRIVATE bool _sapp_android_init_egl(void) {
         EGL_NONE,
     };
     EGLContext context = eglCreateContext(display, config, EGL_NO_CONTEXT, ctx_attributes);
+    if ((context == EGL_NO_CONTEXT) && (_sapp.desc.gl.major_version == 3) && (_sapp.desc.gl.minor_version > 0)) {
+        /* the default on Android asks for GLES 3.1, but a GLES 3.0-only GPU (e.g. Adreno 308,
+           Huawei AGS-L09 on Android 8.0) refuses that context with EGL_BAD_MATCH; retry with 3.0,
+           which is all the GLES3 backend needs, and let sapp_gl_get_minor_version() report it */
+        _sapp.desc.gl.minor_version = 0;
+        ctx_attributes[3] = 0;
+        context = eglCreateContext(display, config, EGL_NO_CONTEXT, ctx_attributes);
+    }
     if (context == EGL_NO_CONTEXT) {
         return false;
     }
