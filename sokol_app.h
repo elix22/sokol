@@ -5179,9 +5179,6 @@ _SOKOL_PRIVATE void _sapp_macos_mtl_transition_to_visible(void) {
 _SOKOL_PRIVATE void _sapp_macos_mtl_init(void) {
     _sapp.macos.mtl.device = MTLCreateSystemDefaultDevice();
     _sapp.macos.mtl.layer = [CAMetalLayer layer];
-    #if !__has_feature(objc_arc)
-        [_sapp.macos.mtl.layer retain];   /* elix22: autoreleased +0 — the discard path releases it (see _sapp_ios_mtl_init) */
-    #endif
     _sapp.macos.mtl.layer.device = _sapp.macos.mtl.device;
     _sapp.macos.mtl.layer.magnificationFilter = kCAFilterNearest;
     _sapp.macos.mtl.layer.opaque = true;
@@ -5225,9 +5222,6 @@ _SOKOL_PRIVATE bool _sapp_macos_mtl_update_framebuffer_dimensions(NSRect view_bo
 _SOKOL_PRIVATE void _sapp_macos_wgpu_init(void) {
     NSInteger max_fps = _sapp_macos_max_fps();
     _sapp.macos.wgpu.mtl_layer = [CAMetalLayer layer];
-    #if !__has_feature(objc_arc)
-        [_sapp.macos.wgpu.mtl_layer retain];   /* elix22: autoreleased +0 — the discard path releases it (see _sapp_ios_mtl_init) */
-    #endif
     _sapp.macos.wgpu.mtl_layer.magnificationFilter = kCAFilterNearest;
     _sapp.macos.wgpu.mtl_layer.opaque = true;
     // NOTE: might experiment with this, valid values are 2 or 3 (default: 3), I don't see any difference tbh
@@ -6454,13 +6448,6 @@ _SOKOL_PRIVATE void _sapp_ios_mtl_init(UIWindowScene* windowScene) {
     #endif
 
     _sapp.ios.mtl.layer = [CAMetalLayer layer];
-    #if !__has_feature(objc_arc)
-        /* elix22: +[CALayer layer] returns an AUTORELEASED object; the view's layer becomes its only owner after
-           addSublayer, so the _SAPP_OBJC_RELEASE in _sapp_ios_mtl_discard_state over-released it under MRC and left a
-           freed sublayer under the sokol view — -[UIWindow dealloc]'s hierarchy walk then crashed in objc_msgSend on
-           iOS 15 (iPhone 7 / 6s, 2026-09-06). Take the reference the discard path gives back. */
-        [_sapp.ios.mtl.layer retain];
-    #endif
     _sapp.ios.mtl.layer.device = _sapp.ios.mtl.device;
     _sapp.ios.mtl.layer.opaque = true;
     _sapp.ios.mtl.layer.framebufferOnly = true;
@@ -6482,7 +6469,13 @@ _SOKOL_PRIVATE void _sapp_ios_mtl_discard_state(void) {
     _sapp_ios_mtl_stop_display_link();
     _sapp_ios_mtl_swapchain_destroy();
     _SAPP_OBJC_RELEASE(_sapp.ios.mtl.layer);
-    _SAPP_OBJC_RELEASE(_sapp.ios.view_ctrl);   /* balanced: alloc/init +1 here, the window's rootViewController holds its own */
+    /* elix22: the view controller is NOT ours to release here. _sapp_ios_mtl_init handed it to the
+       window (rootViewController retains it) and released sokol's reference right there, so a second
+       release over-releases it: on iOS 15 (iPhone 7) applicationWillTerminate then freed the root
+       view controller while the window still pointed at it, and -[UIWindow dealloc]'s subtree walk
+       crashed in objc_msgSend (EXC_BAD_ACCESS, 2026-09-06). The window release at the end of
+       _sapp_ios_discard_state drops the controller with it. */
+    _sapp.ios.view_ctrl = nil;
     _SAPP_OBJC_RELEASE(_sapp.ios.mtl.device);
 }
 
@@ -6531,7 +6524,7 @@ _SOKOL_PRIVATE void _sapp_ios_gles3_init(UIWindowScene* windowScene) {
 }
 
 _SOKOL_PRIVATE void _sapp_ios_gles3_discard_state(void) {
-    _SAPP_OBJC_RELEASE(_sapp.ios.view_ctrl);
+    _sapp.ios.view_ctrl = nil;   /* elix22: owned by the window's rootViewController — see _sapp_ios_mtl_discard_state */
     _SAPP_OBJC_RELEASE(_sapp.ios.eagl_ctx);
 }
 
