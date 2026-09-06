@@ -5,7 +5,8 @@
 /*
     sokol_filesystem.h  -- cross-platform filesystem utilities
 
-    Project URL: https://github.com/floooh/sokol
+    Project URL: https://github.com/elix22/sokol (a Sokol.NET-specific header; it is NOT part of
+    the upstream https://github.com/floooh/sokol project, whose header conventions it follows)
 
     Do this:
         #define SOKOL_IMPL or

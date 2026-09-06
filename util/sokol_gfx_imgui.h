@@ -7,6 +7,14 @@
 
     Project URL: https://github.com/floooh/sokol
 
+    ALTERED SOURCE VERSION -- this file is NOT the original software.
+    It is maintained in the fork https://github.com/elix22/sokol for Sokol.NET
+    (https://github.com/elix22/Sokol.NET) and differs from the upstream project above.
+    Changes from upstream in this file include:
+      - synchronised with the cimgui bindings used by Sokol.NET
+    The complete list is the fork's git history. The license text at the end of this
+    file is unchanged.
+
     Do this:
         #define SOKOL_IMPL or
         #define SOKOL_GFX_IMGUI_IMPL
