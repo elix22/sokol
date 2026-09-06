@@ -6469,7 +6469,13 @@ _SOKOL_PRIVATE void _sapp_ios_mtl_discard_state(void) {
     _sapp_ios_mtl_stop_display_link();
     _sapp_ios_mtl_swapchain_destroy();
     _SAPP_OBJC_RELEASE(_sapp.ios.mtl.layer);
-    _SAPP_OBJC_RELEASE(_sapp.ios.view_ctrl);
+    /* elix22: the view controller is NOT ours to release here. _sapp_ios_mtl_init handed it to the
+       window (rootViewController retains it) and released sokol's reference right there, so a second
+       release over-releases it: on iOS 15 (iPhone 7) applicationWillTerminate then freed the root
+       view controller while the window still pointed at it, and -[UIWindow dealloc]'s subtree walk
+       crashed in objc_msgSend (EXC_BAD_ACCESS, 2026-09-06). The window release at the end of
+       _sapp_ios_discard_state drops the controller with it. */
+    _sapp.ios.view_ctrl = nil;
     _SAPP_OBJC_RELEASE(_sapp.ios.mtl.device);
 }
 
@@ -6518,7 +6524,7 @@ _SOKOL_PRIVATE void _sapp_ios_gles3_init(UIWindowScene* windowScene) {
 }
 
 _SOKOL_PRIVATE void _sapp_ios_gles3_discard_state(void) {
-    _SAPP_OBJC_RELEASE(_sapp.ios.view_ctrl);
+    _sapp.ios.view_ctrl = nil;   /* elix22: owned by the window's rootViewController — see _sapp_ios_mtl_discard_state */
     _SAPP_OBJC_RELEASE(_sapp.ios.eagl_ctx);
 }
 
