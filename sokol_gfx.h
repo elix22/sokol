@@ -11456,6 +11456,10 @@ _SOKOL_PRIVATE void _sg_gl_begin_pass(const sg_pass* pass, const _sg_attachments
             glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, 0, 0);
             glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, 0);
             glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D, 0, 0);
+            // the stencil point too (see the no-depth branch below): a depth-only pass after a depth-stencil
+            // pass otherwise fails with GL_FRAMEBUFFER_UNSUPPORTED on a GLES 3.0 Adreno 308 driver
+            glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT, GL_RENDERBUFFER, 0);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT, GL_TEXTURE_2D, 0, 0);
             const _sg_view_t* view = atts->ds_view;
             const _sg_image_t* img = _sg_image_ref_ptr(&view->cmn.img.ref);
             const GLenum gl_att_type = _sg_gl_depth_stencil_attachment_type(img);
@@ -11468,6 +11472,14 @@ _SOKOL_PRIVATE void _sg_gl_begin_pass(const sg_pass* pass, const _sg_attachments
             // explicitly detach depth-stencil attachment if not used in this pass
             glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, 0);
             glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D, 0, 0);
+            // ...and the separate depth and stencil points too: a GLES 3.0 Adreno 308 driver (Huawei AGS-L09)
+            // keeps a DEPTH_STENCIL renderbuffer attached after the combined detach above, so a colour-only
+            // MSAA pass after a pass with an MSAA depth-stencil (whose renderbuffer may since have been
+            // deleted) fails with GL_FRAMEBUFFER_INCOMPLETE_MULTISAMPLE
+            glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, 0);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, 0, 0);
+            glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT, GL_RENDERBUFFER, 0);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT, GL_TEXTURE_2D, 0, 0);
         }
         if (!_sg_gl_check_framebuffer_status()) {
             _sg.cur_pass.valid = false;
