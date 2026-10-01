@@ -10977,6 +10977,22 @@ void ANativeActivity_onCreate(ANativeActivity* activity, void* saved_state, size
     _SOKOL_UNUSED(saved_state_size);
     _SAPP_INFO(ANDROID_NATIVE_ACTIVITY_ONCREATE);
 
+    // elix22 - ONE sokol activity per process. Android can create a second instance of the activity while the first
+    // one is still alive in this process: a launch with FLAG_ACTIVITY_CLEAR_TASK can create the new instance BEFORE it
+    // destroys the old one (timing-dependent; seen on Android 9, 13, 14, 16), and launchMode="standard" stacks one on
+    // any launch whose intent differs from the task's. Running the setup below again clears _sapp under the live loop
+    // thread and calls init_cb a second time while sokol_gfx is still set up: sg_setup asserts "!_sg.valid" -> SIGABRT.
+    // Finish the duplicate and leave the running instance alone; no callbacks are registered for the duplicate, so the
+    // framework calls nothing on it. Set only once this activity runs sokol (below), so a setup that fails can never
+    // lock a later launch out; never reset, because every exit (Back, sapp_quit, swipe-away, the system) ends in a
+    // sokol activity's onDestroy, which ends the process (_exit(0) above) — the next start is a fresh process.
+    static bool activity_live = false;
+    if (activity_live) {
+        _SAPP_WARN_MSG(ANDROID_NATIVE_ACTIVITY_ONCREATE, "second activity instance in a live process - finished it, the running one carries on");
+        ANativeActivity_finish(activity);
+        return;
+    }
+
     // the NativeActity pointer needs to be available inside sokol_main()
     // (see https://github.com/floooh/sokol/issues/708), however _sapp_init_state()
     // will clear the global _sapp_t struct, so we need to initialize the native
@@ -10995,6 +11011,7 @@ void ANativeActivity_onCreate(ANativeActivity* activity, void* saved_state, size
         _SAPP_ERROR(ANDROID_CREATE_THREAD_PIPE_FAILED);
         return;
     }
+    activity_live = true;   // nothing below can fail: from here this activity runs sokol until its onDestroy
     _sapp.android.pt.read_from_main_fd = pipe_fd[0];
     _sapp.android.pt.write_from_main_fd = pipe_fd[1];
 
