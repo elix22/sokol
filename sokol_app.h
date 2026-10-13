@@ -1794,6 +1794,7 @@ typedef struct sapp_allocator {
     _SAPP_LOGITEM_XMACRO(ANDROID_MSG_SET_NATIVE_WINDOW, "MSG_SET_NATIVE_WINDOW") \
     _SAPP_LOGITEM_XMACRO(ANDROID_MSG_SET_INPUT_QUEUE, "MSG_SET_INPUT_QUEUE") \
     _SAPP_LOGITEM_XMACRO(ANDROID_MSG_DESTROY, "MSG_DESTROY") \
+    _SAPP_LOGITEM_XMACRO(ANDROID_MSG_BACK, "MSG_BACK") \
     _SAPP_LOGITEM_XMACRO(ANDROID_UNKNOWN_MSG, "unknown msg type received") \
     _SAPP_LOGITEM_XMACRO(ANDROID_LOOP_THREAD_STARTED, "loop thread started") \
     _SAPP_LOGITEM_XMACRO(ANDROID_LOOP_THREAD_DONE, "loop thread done") \
@@ -3030,6 +3031,7 @@ typedef enum {
     _SOKOL_ANDROID_MSG_SET_NATIVE_WINDOW,
     _SOKOL_ANDROID_MSG_SET_INPUT_QUEUE,
     _SOKOL_ANDROID_MSG_DESTROY,
+    _SOKOL_ANDROID_MSG_BACK,    // sokol-csharp: OnBackInvokedCallback (API 33+), see nativeOnBackInvoked
 } _sapp_android_msg_t;
 
 typedef struct {
@@ -10464,6 +10466,14 @@ _SOKOL_PRIVATE void _sapp_android_frame(void) {
     _sapp_timing_update(&_sapp.timing, 0.0);
     _sapp_android_update_dimensions(_sapp.android.current.window, false);
     _sapp_frame();
+    // sokol-csharp: Back (or sapp_request_quit()) asks to quit — give user code a chance to intervene
+    // with sapp_cancel_quit(), like the desktop backends; an app that ignores the event quits as before.
+    if (_sapp.quit_requested && !_sapp.quit_ordered) {
+        _sapp_android_app_event(SAPP_EVENTTYPE_QUIT_REQUESTED);
+        if (_sapp.quit_requested) {
+            _sapp.quit_ordered = true;
+        }
+    }
     // If sapp_quit() was called during the frame, shut down cleanly before
     // touching EGL again — eglSwapBuffers on a destroyed surface would crash.
     if (_sapp.quit_ordered) {
@@ -10532,11 +10542,16 @@ _SOKOL_PRIVATE bool _sapp_android_key_event(const AInputEvent* e) {
         return false;
     }
     if (AKeyEvent_getKeyCode(e) == AKEYCODE_BACK) {
-        /* FIXME: this should be hooked into a "really quit?" mechanism
-           so the app can ask the user for confirmation, this is currently
-           generally missing in sokol_app.h
+        /* sokol-csharp: Back requests a quit (SAPP_EVENTTYPE_QUIT_REQUESTED, cancellable with
+           sapp_cancel_quit()) instead of shutting down. Acts on the release; the press is consumed
+           too, so the system never handles it. Android 16+ with targetSdk 36 no longer dispatches
+           KEYCODE_BACK at all: there Back arrives via OnBackInvokedCallback (_SOKOL_ANDROID_MSG_BACK).
         */
-        _sapp_android_shutdown();
+        if ((AKeyEvent_getAction(e) == AKEY_EVENT_ACTION_UP) &&
+            ((AKeyEvent_getFlags(e) & AKEY_EVENT_FLAG_CANCELED) == 0))
+        {
+            _sapp.quit_requested = true;
+        }
         return true;
     }
     return false;
@@ -10645,6 +10660,10 @@ _SOKOL_PRIVATE int _sapp_android_main_cb(int fd, int events, void* data) {
             _sapp_android_cleanup();
             _sapp.valid = false;
             _sapp.android.is_thread_stopping = true;
+            break;
+        case _SOKOL_ANDROID_MSG_BACK:
+            _SAPP_INFO(ANDROID_MSG_BACK);
+            _sapp.quit_requested = true;    // handled like the Back key, see _sapp_android_frame()
             break;
         default:
             _SAPP_WARN(ANDROID_UNKNOWN_MSG);
@@ -10832,6 +10851,15 @@ _SOKOL_PRIVATE void _sapp_android_msg(_sapp_android_msg_t msg) {
     if (write(_sapp.android.pt.write_from_main_fd, &msg, sizeof(msg)) != sizeof(msg)) {
         _SAPP_ERROR(ANDROID_WRITE_MSG_FAILED);
     }
+}
+
+/* sokol-csharp: Back from SokolNativeActivity's OnBackInvokedCallback (API 33+; the only Back
+   delivery on Android 16+ for targetSdk 36), on the main/ui thread. The callback is unregistered
+   in onDestroy before NativeActivity tears the message pipe down. */
+JNIEXPORT void JNICALL Java_com_sokol_app_SokolNativeActivity_nativeOnBackInvoked(JNIEnv* env, jobject obj) {
+    _SOKOL_UNUSED(env);
+    _SOKOL_UNUSED(obj);
+    _sapp_android_msg(_SOKOL_ANDROID_MSG_BACK);
 }
 
 _SOKOL_PRIVATE void _sapp_android_on_start(ANativeActivity* activity) {
