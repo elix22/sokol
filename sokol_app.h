@@ -2202,7 +2202,9 @@ SOKOL_APP_API_DECL void sapp_quit(void);
    picture has not changed skips drawing it again). Call it from the frame callback. True when this backend honours it:
    the app must then not begin a swapchain pass in this frame. False when it cannot (the backend presents every frame):
    the app draws as usual. Android: the buffer swap is skipped and the frame waits about one display refresh instead
-   (the swap paces the loop). Metal (macOS, iOS): a frame without a swapchain pass is never presented. */
+   (the swap paces the loop). Metal (macOS, iOS): a frame without a swapchain pass is never presented. D3D11 (Windows 10
+   and later, flip-model swapchain): Present is skipped and the frame waits up to about one display refresh, ended at once
+   by any window message (input, resize). */
 SOKOL_APP_API_DECL bool sapp_skip_present(void);
 /* call from inside event callback to consume the current event (don't forward to platform) */
 SOKOL_APP_API_DECL void sapp_consume_event(void);
@@ -2941,6 +2943,7 @@ typedef struct {
     WCHAR surrogate;
     RECT stored_window_rect;    // used to restore window pos/size when toggling fullscreen => windowed
     bool is_win10_or_greater;
+    bool skip_present;          // sokol-csharp: sapp_skip_present() in this frame (D3D11)
     bool in_create_window;
     bool iconified;
     _sapp_win32_dpi_t dpi;
@@ -9484,8 +9487,18 @@ _SOKOL_PRIVATE void _sapp_win32_frame(bool from_winproc) {
         _sapp_frame();
     #endif
     #if defined(SOKOL_D3D11)
-        bool do_not_wait = from_winproc;
-        _sapp_d3d11_present(do_not_wait);
+        if (_sapp.win32.skip_present) {
+            // sokol-csharp: sapp_skip_present() - nothing new was drawn: keep the image on screen, and wait up to about
+            // one display refresh instead of the Present that would have paced the loop (else it spins); a message
+            // (input, resize) ends the wait at once. From the window procedure (move / resize) WM_TIMER paces it.
+            _sapp.win32.skip_present = false;
+            if (!from_winproc) {
+                MsgWaitForMultipleObjects(0, NULL, FALSE, 16, QS_ALLINPUT);
+            }
+        } else {
+            bool do_not_wait = from_winproc;
+            _sapp_d3d11_present(do_not_wait);
+        }
     #endif
     #if defined(SOKOL_GLCORE)
         _sapp_wgl_swap_buffers();
@@ -14308,6 +14321,13 @@ SOKOL_API_IMPL bool sapp_skip_present(void) {
         return true;
     #elif defined(_SAPP_APPLE) && defined(SOKOL_METAL)
         return true;
+    #elif defined(_SAPP_WIN32) && defined(SOKOL_D3D11)
+        // only the flip-model swapchain (Windows 10 and later) keeps the last presented image on screen
+        if (_sapp.win32.is_win10_or_greater) {
+            _sapp.win32.skip_present = true;
+            return true;
+        }
+        return false;
     #else
         return false;
     #endif
