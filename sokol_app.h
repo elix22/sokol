@@ -2198,6 +2198,12 @@ SOKOL_APP_API_DECL void sapp_request_quit(void);
 SOKOL_APP_API_DECL void sapp_cancel_quit(void);
 /* initiate a "hard quit" (quit application without sending SAPP_EVENTTYPE_QUIT_REQUESTED) */
 SOKOL_APP_API_DECL void sapp_quit(void);
+/* sokol-csharp: ask that the current frame is not presented, so the image on screen stays as it is (an app whose
+   picture has not changed skips drawing it again). Call it from the frame callback. True when this backend honours it:
+   the app must then not begin a swapchain pass in this frame. False when it cannot (the backend presents every frame):
+   the app draws as usual. Android: the buffer swap is skipped and the frame waits about one display refresh instead
+   (the swap paces the loop). Metal (macOS, iOS): a frame without a swapchain pass is never presented. */
+SOKOL_APP_API_DECL bool sapp_skip_present(void);
 /* call from inside event callback to consume the current event (don't forward to platform) */
 SOKOL_APP_API_DECL void sapp_consume_event(void);
 /* get the current frame counter (for comparison with sapp_event.frame_count) */
@@ -3059,6 +3065,7 @@ typedef struct {
     bool has_created;
     bool has_resumed;
     bool has_focus;
+    bool skip_present;      // sokol-csharp: sapp_skip_present() in this frame
     EGLConfig config;
     EGLDisplay display;
     EGLContext context;
@@ -10480,6 +10487,13 @@ _SOKOL_PRIVATE void _sapp_android_frame(void) {
         _sapp_android_shutdown();
         return;
     }
+    // sokol-csharp: sapp_skip_present() - nothing new was drawn: keep the image on screen, and wait about one display
+    // refresh instead of the swap that would have paced the loop (else it spins).
+    if (_sapp.android.skip_present) {
+        _sapp.android.skip_present = false;
+        usleep(16000);
+        return;
+    }
     eglSwapBuffers(_sapp.android.display, _sapp.android.surface);
 }
 
@@ -14286,6 +14300,17 @@ SOKOL_API_IMPL void sapp_cancel_quit(void) {
 
 SOKOL_API_IMPL void sapp_quit(void) {
     _sapp.quit_ordered = true;
+}
+
+SOKOL_API_IMPL bool sapp_skip_present(void) {
+    #if defined(_SAPP_ANDROID)
+        _sapp.android.skip_present = true;
+        return true;
+    #elif defined(_SAPP_APPLE) && defined(SOKOL_METAL)
+        return true;
+    #else
+        return false;
+    #endif
 }
 
 SOKOL_API_IMPL void sapp_consume_event(void) {
